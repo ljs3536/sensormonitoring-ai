@@ -1,10 +1,17 @@
 # sensor-ai/main.py
 # 서비스 엔트리 포인트 (FastAPI 라우팅)
-from fastapi import FastAPI, BackgroundTasks
-from database import AIStore  # 아까 만드신 database.py 임포트
+from fastapi import FastAPI, BackgroundTasks, Depends, HTTPException
+from sqlalchemy.orm import Session
+from database import AIStore 
 import numpy as np
-import time
 import os
+
+from train_engine import run_training
+from predict_engine import run_inference
+
+# RDB 연동 모듈 임포트
+from database_rdb import get_db, SessionLocal
+from models import AiModel
 
 app = FastAPI()
 db = AIStore() # DB 클라이언트 인스턴스 생성
@@ -13,67 +20,80 @@ db = AIStore() # DB 클라이언트 인스턴스 생성
 MODEL_DIR = "models"
 os.makedirs(MODEL_DIR, exist_ok=True)
 
-model_status = {"status": "ready", "last_trained": None}
 
 @app.post("/train")
-async def train_model(sensor_type: str, background_tasks: BackgroundTasks, days: int = 7):
-    """
-    비동기로 데이터를 가져와 학습을 진행합니다.
-    """
-    def heavy_training_task(s_type, lookback_days):
-        global model_status
+async def train_model(
+    sensor_type: str, 
+    model_type: str = "AutoEncoder", # 기본값 설정
+    days: int = 7, 
+    background_tasks: BackgroundTasks = None
+):
+    # 1. 학습 시작 전 DB에 'TRAINING' 상태로 레코드 생성
+    new_model = AiModel(
+        sensor_type=sensor_type,
+        model_type=model_type,
+        status="TRAINING"
+    )
+    db.add(new_model)
+    db.commit()
+    db.refresh(new_model)
+    model_id = new_model.id # 생성된 ID 가져오기
+
+    # 2. 백그라운드 작업 정의
+    def task(m_id, s_type, m_type, train_days):
+        # 백그라운드 쓰레드이므로 별도의 DB 세션을 열어야 합니다.
+        db_session = SessionLocal()
+        model_record = db_session.query(AiModel).filter(AiModel.id == m_id).first()
+        
         try:
-            model_status["status"] = "training"
-            print(f"--- [START] {s_type} 데이터 로드 (최근 {lookback_days}일) ---")
+            # 학습 엔진 실행 (완료 후 생성된 tflite 파일의 절대/상대 경로 반환)
+            file_path = run_training(s_type, m_type, train_days)
             
-            # 1. InfluxDB에서 Pandas DataFrame으로 데이터 가져오기
-            df = db.fetch_training_data(s_type, days=lookback_days)
+            # 성공 시 DB 업데이트
+            model_record.status = "READY"
+            model_record.file_path = file_path
+            db_session.commit()
+            print(f"--- [SUCCESS] 모델 {m_id} 학습 완료 ---")
             
-            if df.empty:
-                print(f"--- [ERROR] 학습할 데이터가 없습니다! ---")
-                model_status["status"] = "ready"
-                return
-
-            print(f"--- [DATA LOADED] 총 {len(df)}개의 행을 불러왔습니다. ---")
-
-            # 2. 전처리 및 PyTorch 학습 로직 (여기에 PyTorch 코드가 들어갑니다)
-            # 예: values = df['value'].values.astype(np.float32)
-            # TODO: PyTorch 모델 정의 -> Train -> .pt 저장
-            time.sleep(5) # 학습 시뮬레이션
-
-            # 3. TFLite 변환 및 저장
-            # TODO: TFLiteConverter를 사용해 .tflite 파일로 저장
-            model_path = os.path.join(MODEL_DIR, f"{s_type}_model.tflite")
-            with open(model_path, "w") as f: f.write("Dummy TFLite Content") # 파일 생성 시뮬레이션
-
-            model_status["status"] = "ready"
-            model_status["last_trained"] = time.ctime()
-            print(f"--- [FINISH] {s_type} 모델 학습 및 TFLite 저장 완료: {model_path} ---")
-
         except Exception as e:
-            print(f"--- [CRITICAL ERROR] 학습 실패: {e} ---")
-            model_status["status"] = "error"
+            # 실패 시 ERROR 상태로 업데이트
+            print(f"--- [ERROR] 모델 {m_id} 학습 실패: {e} ---")
+            model_record.status = "ERROR"
+            db_session.commit()
+        finally:
+            db_session.close()
 
-    background_tasks.add_task(heavy_training_task, sensor_type, days)
-    return {"message": f"{sensor_type} 학습이 시작되었습니다.", "status": "processing"}
+    # 3. 백그라운드 실행
+    background_tasks.add_task(task, model_id, sensor_type, model_type, days)
+    return {
+        "message": f"{sensor_type} {model_type} 학습이 시작되었습니다.", 
+        "model_id": model_id
+    }
 
 
 @app.post("/predict")
-async def predict_anomaly(sensor_type: str, data: list):
+async def predict(model_id: int, data: list, db: Session = Depends(get_db)):
     """
-    전달받은 데이터를 TFLite 모델로 분석합니다.
+    이제 predict는 sensor_type 대신 model_id를 받습니다!
     """
-    if model_status["status"] == "training":
-        return {"error": "모델이 현재 학습 중입니다."}
-        
-    # TODO: 실제 TFLite Interpreter 로드 및 invoke 로직
-    # 임시: 더미 스코어 계산
-    score = float(np.std(data) / 10.0)
-    return {
-        "anomaly_score": round(min(score, 1.0), 4),
-        "prediction": "abnormal" if score > 0.7 else "normal"
-    }
+    # 1. DB에서 모델 정보(파일 경로) 조회
+    model_record = db.query(AiModel).filter(AiModel.id == model_id).first()
+    
+    if not model_record:
+        raise HTTPException(status_code=404, detail="모델을 찾을 수 없습니다.")
+    if model_record.status != "READY":
+        raise HTTPException(status_code=400, detail="모델이 아직 학습 중이거나 에러 상태입니다.")
 
+    try:
+        # 2. 파일 경로를 예측 엔진에 넘겨서 추론 실행
+        # run_inference 함수도 파라미터를 file_path를 받도록 수정해야 합니다.
+        score = run_inference(model_record.file_path, data)
+        return {"anomaly_score": score}
+    except Exception as e:
+        return {"error": str(e)}
+    
 @app.get("/status")
-async def get_status():
-    return model_status
+async def get_status(db: Session = Depends(get_db)):
+    # 시스템 상태 체크용 (최근 동작 중인 모델이 있는지 반환)
+    is_training = db.query(AiModel).filter(AiModel.status == "TRAINING").first() is not None
+    return {"status": "training" if is_training else "ready"}
