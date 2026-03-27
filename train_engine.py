@@ -2,7 +2,7 @@
 import torch
 import numpy as np
 from database import AIStore
-from architectures.autoencoder import AutoEncoderTrainer # 별도 정의 가정
+from architectures.autoencoder import AutoEncoderTrainer 
 
 db = AIStore()
 
