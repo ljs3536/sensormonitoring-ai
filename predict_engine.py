@@ -45,6 +45,14 @@ def run_inference(file_path: str, model_type:str, input_data: list):
     # 4. 복원 오차(MSE) 계산
     mse = nn.MSELoss()(output, tensor_x).item()
 
+    # 추가: 원본 데이터와 AI가 복원한 데이터의 스케일을 원래대로 복구해서 리스트로 변환
+    # (프론트엔드 차트에 그리기 위함)
+    original_signal = (tensor_x.squeeze().numpy() * max_val).tolist()
+    reconstructed_signal = (output.squeeze().numpy() * max_val).tolist()
+
+    # 각 포인트별 오차 (어느 순간에 튀었는지 확인용)
+    pointwise_error = np.abs(np.array(original_signal) - np.array(reconstructed_signal)).tolist()
+
     # 5. 결과 지표 가공 (임계치 기반)
     # 실제 실무에서는 이 THRESHOLD를 학습 시 데이터의 분포를 보고 동적으로 설정합니다.
     THRESHOLD = 0.5 
@@ -70,5 +78,11 @@ def run_inference(file_path: str, model_type:str, input_data: list):
         "anomaly_score": round(anomaly_score, 4), # UI 게이지 표출용 점수 (0~1)
         "prediction": "abnormal" if is_anomaly else "normal", # 최종 판정
         "severity": severity,                     # 위험도 텍스트
-        "message": "데이터 패턴이 정상 범주를 벗어났습니다." if is_anomaly else "정상적인 센서 패턴입니다."
+        "message": "데이터 패턴이 정상 범주를 벗어났습니다." if is_anomaly else "정상적인 센서 패턴입니다.",
+        # 🌟 UI 차트용 추가 데이터
+        "chart_data": {
+            "original": original_signal,
+            "reconstructed": reconstructed_signal,
+            "errors": pointwise_error
+        }
     }
