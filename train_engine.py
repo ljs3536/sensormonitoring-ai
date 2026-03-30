@@ -3,7 +3,7 @@ import torch
 import numpy as np
 from database import AIStore
 from architectures.autoencoder import AutoEncoderTrainer 
-
+from architectures.cnnlstmautoencoder import CNNLSTMAutoEncoderTrainer
 db = AIStore()
 
 def run_training(sensor_type: str, model_type: str, days: int):
@@ -21,8 +21,9 @@ def run_training(sensor_type: str, model_type: str, days: int):
     if model_type.lower() == "autoencoder":
         trainer = AutoEncoderTrainer(sensor_type)
         model_path = trainer.train(df) # 학습 후 TFLite 경로 반환
-    elif model_type.lower() == "lstm":
-        # TODO: LSTM 학습 로직 추가
+    elif model_type.lower() == "cnnlstmautoencoder":
+        trainer = CNNLSTMAutoEncoderTrainer(sensor_type)
+        model_path = trainer.train(df)
         pass
     else:
         raise ValueError(f"지원하지 않는 모델 타입입니다: {model_type}")

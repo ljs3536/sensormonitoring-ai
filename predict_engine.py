@@ -4,18 +4,24 @@ import torch.nn as nn
 import numpy as np
 import os
 from architectures.autoencoder import SensorAutoEncoder # 우리가 만든 모델 구조 임포트
+from architectures.cnnlstmautoencoder import CNNLSTMAutoEncoder
 
-def run_inference(file_path: str, input_data: list):
+def run_inference(file_path: str, model_type:str, input_data: list):
     """
     저장된 PyTorch(.pt) 모델을 로드하여 추론을 실행하고 상세 리포트를 반환합니다.
     """
     if not os.path.exists(file_path):
         raise FileNotFoundError(f"모델 파일을 찾을 수 없습니다: {file_path}")
-
+    
     input_size = len(input_data)
     
     # 1. 모델 구조 세팅 및 가중치(.pt) 로드
-    model = SensorAutoEncoder(input_size=input_size)
+    if model_type.lower() == "autoencoder":
+        model = SensorAutoEncoder(input_size=input_size)
+    elif model_type.lower() == "cnnlstmautoencoder":
+        model = CNNLSTMAutoEncoder(seq_len=input_size)
+
+    
     model.load_state_dict(torch.load(file_path, weights_only=True))
     model.eval() # 평가 모드 설정 (학습 모드 아님)
 
@@ -26,7 +32,11 @@ def run_inference(file_path: str, input_data: list):
     input_normalized = input_arr / max_val
 
     # PyTorch 텐서 변환 및 배치 차원(1) 추가: 모양을 (1, 128)로 만듦
-    tensor_x = torch.tensor(input_normalized).unsqueeze(0)
+    if model_type.lower() == "autoencoder":
+        tensor_x = torch.tensor(input_normalized).unsqueeze(0)
+    elif model_type.lower() == "cnnlstmautoencoder":
+        tensor_x = torch.tensor(input_normalized).unsqueeze(0).unsqueeze(0)
+    
 
     # 3. 추론 (Reconstruction) 실행
     with torch.no_grad(): # 예측할 때는 기울기 계산을 안 하므로 메모리 절약
