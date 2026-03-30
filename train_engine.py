@@ -20,11 +20,11 @@ def run_training(sensor_type: str, model_type: str, days: int):
     # 2. 모델 타입에 따른 분기 (Strategy)
     if model_type.lower() == "autoencoder":
         trainer = AutoEncoderTrainer(sensor_type)
-        tflite_path = trainer.train(df) # 학습 후 TFLite 경로 반환
+        model_path = trainer.train(df) # 학습 후 TFLite 경로 반환
     elif model_type.lower() == "lstm":
         # TODO: LSTM 학습 로직 추가
         pass
     else:
         raise ValueError(f"지원하지 않는 모델 타입입니다: {model_type}")
 
-    return tflite_path
+    return model_path

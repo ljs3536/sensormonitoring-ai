@@ -17,7 +17,7 @@ class AIStore:
     def fetch_training_data(self, sensor_type, days=7):
         """학습을 위해 7일치 데이터를 DataFrame으로 가져옴"""
         query = f'''
-            from(bucket: "my_bucket")
+            from(bucket: "{settings.influxdb_bucket}")
             |> range(start: -{days}d)
             |> filter(fn: (r) => r["_measurement"] == "{sensor_type}_sensor")
             |> pivot(rowKey:["_time"], columnKey: ["_field"], valueColumn: "_value")

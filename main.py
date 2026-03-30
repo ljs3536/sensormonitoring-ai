@@ -14,7 +14,7 @@ from database_rdb import get_db, SessionLocal
 from models import AiModel
 
 app = FastAPI()
-db = AIStore() # DB 클라이언트 인스턴스 생성
+influx_store = AIStore() # DB 클라이언트 인스턴스 생성
 
 # 모델 저장 경로 설정
 MODEL_DIR = "models"
@@ -26,7 +26,8 @@ async def train_model(
     sensor_type: str, 
     model_type: str = "AutoEncoder", # 기본값 설정
     days: int = 7, 
-    background_tasks: BackgroundTasks = None
+    background_tasks: BackgroundTasks = None,
+    db: Session = Depends(get_db) # MariaDB 세션 주입 (이게 있어야 db.add가 작동합니다!)
 ):
     # 1. 학습 시작 전 DB에 'TRAINING' 상태로 레코드 생성
     new_model = AiModel(
@@ -92,6 +93,8 @@ async def predict(model_id: int, data: list, db: Session = Depends(get_db)):
     except Exception as e:
         return {"error": str(e)}
     
+
+
 @app.get("/status")
 async def get_status(db: Session = Depends(get_db)):
     # 시스템 상태 체크용 (최근 동작 중인 모델이 있는지 반환)
