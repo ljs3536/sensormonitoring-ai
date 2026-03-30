@@ -1,6 +1,6 @@
 # sensor-ai/main.py
 # 서비스 엔트리 포인트 (FastAPI 라우팅)
-from fastapi import FastAPI, BackgroundTasks, Depends, HTTPException
+from fastapi import FastAPI, BackgroundTasks, Depends, HTTPException, Body
 from sqlalchemy.orm import Session
 from database import AIStore 
 import numpy as np
@@ -73,7 +73,7 @@ async def train_model(
 
 
 @app.post("/predict")
-async def predict(model_id: int, data: list, db: Session = Depends(get_db)):
+async def predict(model_id: int, data: list = Body(...), db: Session = Depends(get_db)):
     """
     이제 predict는 sensor_type 대신 model_id를 받습니다!
     """
@@ -88,8 +88,9 @@ async def predict(model_id: int, data: list, db: Session = Depends(get_db)):
     try:
         # 2. 파일 경로를 예측 엔진에 넘겨서 추론 실행
         # run_inference 함수도 파라미터를 file_path를 받도록 수정해야 합니다.
-        score = run_inference(model_record.file_path, data)
-        return {"anomaly_score": score}
+        result_dict = run_inference(model_record.file_path, data)
+        print("결과 : ",result_dict)
+        return result_dict
     except Exception as e:
         return {"error": str(e)}
     
