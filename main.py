@@ -93,7 +93,35 @@ async def predict(model_id: int, data: list, db: Session = Depends(get_db)):
     except Exception as e:
         return {"error": str(e)}
     
+@app.get("/models")
+async def get_all_models(sensor_type: str = None, db: Session = Depends(get_db)):
+    """등록된 모든 모델 목록을 가져옵니다."""
+    query = db.query(AiModel).order_by(AiModel.created_at.desc())
+    if sensor_type:
+        query = query.filter(AiModel.sensor_type == sensor_type)
+    return query.all()
 
+@app.delete("/models/{model_id}")
+async def delete_model(model_id: int, db: Session = Depends(get_db)):
+    """특정 모델의 DB 기록과 실제 파일을 삭제합니다."""
+    model_record = db.query(AiModel).filter(AiModel.id == model_id).first()
+    
+    if not model_record:
+        raise HTTPException(status_code=404, detail="모델을 찾을 수 없습니다.")
+    
+    # 1. 실제 모델 파일(.pt)이 존재하면 물리적으로 삭제
+    if model_record.file_path and os.path.exists(model_record.file_path):
+        try:
+            os.remove(model_record.file_path)
+            print(f"--- [DELETE] 물리적 파일 삭제 완료: {model_record.file_path} ---")
+        except Exception as e:
+            print(f"--- [WARNING] 파일 삭제 실패: {e} ---")
+
+    # 2. DB 레코드 삭제
+    db.delete(model_record)
+    db.commit()
+    
+    return {"message": f"모델 {model_id}이(가) 성공적으로 삭제되었습니다."}
 
 @app.get("/status")
 async def get_status(db: Session = Depends(get_db)):
