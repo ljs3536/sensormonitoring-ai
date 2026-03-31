@@ -1,4 +1,4 @@
-# 🧠 Sensor AI
+# Sensor AI
 > PyTorch 기반의 시계열 센서 데이터 분석 및 이상 탐지 엔진
 
 이 모듈은 InfluxDB에 축적된 센서 데이터를 학습하여 장비의 상태를 분류(Classification)하거나 이상 징후(Anomaly Detection)를 탐지합니다. 시계열 데이터의 시간적, 공간적 특징을 동시에 추출하기 위해 CNN-LSTM 하이브리드 구조를 채택했습니다.
