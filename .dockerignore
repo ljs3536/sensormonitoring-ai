@@ -1,0 +1,27 @@
+# 1. 가상환경 및 캐시 (필수 제외)
+venv/
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# 2. 로컬 설정 및 비밀번호 (보안상 제외)
+.env
+.env.example
+.git/
+.gitignore
+
+# 3. 도커 관련 파일 (컨테이너 내부에는 필요 없음)
+Dockerfile
+docker-compose.yml
+.dockerignore
+
+# 4. 기타 문서 및 임시 파일
+README.md
+start.txt
+.vscode/
+.idea/
+
+# 5. 대용량 모델 파일 (전략적 선택)
+# models/

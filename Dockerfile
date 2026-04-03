@@ -1,5 +1,5 @@
 # AI 라이브러리는 무겁기 때문에 적절한 베이스 선택이 중요합니다.
-FROM python:3.9-slim
+FROM python:3.11-slim
 
 WORKDIR /app
 
@@ -13,4 +13,5 @@ COPY . .
 # 포트 설정
 EXPOSE 8002
 
-CMD ["uvicorn", "main:app"]
+# [수정포인트] --host 0.0.0.0이 없으면 클러스터 외부/내부에서 접속이 안 됩니다.
+CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8002"]

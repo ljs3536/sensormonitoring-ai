@@ -1,0 +1,44 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mariadb
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: mariadb
+  template:
+    metadata:
+      labels:
+        app: mariadb
+    spec:
+      containers:
+        - name: mariadb
+          # 내부 레지스트리 주소를 사용합니다.
+          image: k3d-my-cluster-registry:5000/mariadb:10.11
+          ports:
+            - containerPort: 3306
+          env:
+            - name: MARIADB_ROOT_PASSWORD
+              value: "sensor_root_password"
+            - name: MARIADB_DATABASE
+              value: "sensor_db"
+            - name: MARIADB_USER
+              value: "sensor_user"
+            - name: MARIADB_PASSWORD
+              value: "sensor_password"
+          resources:
+            limits:
+              memory: "800Mi"
+              cpu: "500m"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: mariadb-svc
+spec:
+  selector:
+    app: mariadb
+  ports:
+    - port: 3306
+      targetPort: 3306
