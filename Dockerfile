@@ -14,4 +14,4 @@ COPY . .
 EXPOSE 8002
 
 # [수정포인트] --host 0.0.0.0이 없으면 클러스터 외부/내부에서 접속이 안 됩니다.
-CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8002"]
+CMD ["python", "-m","uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8002"]

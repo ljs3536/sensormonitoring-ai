@@ -9,7 +9,7 @@ from architectures.cnnlstmautoencoder import CNNLSTMAutoEncoderTrainer
 
 # 지도 학습용 임포트 추가!
 from architectures.cnnlstm_classifier import CNNLSTMClassifierTrainer
-
+from architectures.spectrogram_cnn import SpectrogramCNNTrainer
 db = AIStore()
 
 def run_unsupervised_training(sensor_type: str, model_type: str, days: int):
@@ -43,9 +43,9 @@ def run_supervised_training(sensor_type: str, model_type: str, days: int):
         model_path = trainer.train(df)
     
     # 나중에 추가할 모델들 예약 자리!
-    # elif model_type.lower() == "spectrogram_cnn":
-    #     trainer = SpectrogramCNNTrainer(sensor_type)
-    #     model_path = trainer.train(df)
+    elif model_type.lower() == "spectogram_cnn":
+        trainer = SpectrogramCNNTrainer(sensor_type)
+        model_path = trainer.train(df)
     # elif model_type.lower() == "timeseries_transformer":
     #     trainer = TransformerClassifierTrainer(sensor_type)
     #     model_path = trainer.train(df)

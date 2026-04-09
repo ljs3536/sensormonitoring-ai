@@ -9,8 +9,9 @@ import json
 # 모델들 임포트
 from architectures.autoencoder import SensorAutoEncoder 
 from architectures.cnnlstmautoencoder import CNNLSTMAutoEncoder
-from architectures.cnnlstm_classifier import CNNLSTMClassifier # 🌟 추가
-
+from architectures.cnnlstm_classifier import CNNLSTMClassifier 
+from architectures.spectrogram_cnn import SpectrogramCNN
+from preprocess import SpectrogramTransformer
 # =====================================================================
 # 1. 비지도 학습용 추론 엔진 (AutoEncoder - 기존 로직)
 # =====================================================================
@@ -99,19 +100,33 @@ def run_supervised_inference(file_path: str, model_type: str, input_data: list):
     # 모델 세팅
     if model_type.lower() == "cnnlstm_classifier":
         model = CNNLSTMClassifier(seq_len=input_size, num_classes=num_classes)
+
+        # [핵심] 예측할 때 자기 자신이 아닌, 학습 당시의 train_max_val로 나눠줌!!
+        input_arr = np.array(input_data, dtype=np.float32)
+        if train_max_val == 0: train_max_val = 1
+        input_normalized = input_arr / train_max_val
+
+        # CNN-LSTM 용 차원 (batch=1, channels=1, seq_len=128)
+        tensor_x = torch.tensor(input_normalized).unsqueeze(0).unsqueeze(0)
+    elif model_type.lower() == "spectogram_cnn":
+        model = SpectrogramCNN(num_classes=num_classes)
+
+        # 🌟 [Spectrogram CNN 방식] 1D -> 2D 변환 과정 추가
+        # 학습 때 사용한 sample_rate와 동일하게 설정해야 합니다. (코드상 1000Hz)
+        transformer = SpectrogramTransformer(sample_rate=1000) 
+        
+        input_arr = np.array(input_data, dtype=np.float32) / train_max_val
+        
+        # 1. 1D 데이터를 2D 스펙트로그램으로 변환 (예: 64x9 이미지 생성)
+        x_2d = transformer(input_arr) # 결과는 보통 [1, Height, Width] 형태의 텐서
+        
+        # 2. 배치 차원 추가 [1, 1, Height, Width]
+        tensor_x = x_2d.unsqueeze(0)
     else:
         raise ValueError("지원하지 않는 지도 모델입니다.")
 
     model.load_state_dict(torch.load(file_path, weights_only=True))
     model.eval()
-
-    # [핵심] 예측할 때 자기 자신이 아닌, 학습 당시의 train_max_val로 나눠줌!!
-    input_arr = np.array(input_data, dtype=np.float32)
-    if train_max_val == 0: train_max_val = 1
-    input_normalized = input_arr / train_max_val
-
-    # CNN-LSTM 용 차원 (batch=1, channels=1, seq_len=128)
-    tensor_x = torch.tensor(input_normalized).unsqueeze(0).unsqueeze(0)
 
     with torch.no_grad():
         logits = model(tensor_x) # 결과값은 확률이 아닌 순수 수치(Logits)
@@ -138,6 +153,7 @@ def run_supervised_inference(file_path: str, model_type: str, input_data: list):
     return {
         "learning_type": "supervised", # 프론트엔드 구분용
         "prediction": predicted_label, # 최종 예측 라벨
+        "model_type": model_type,
         "confidence": round(best_confidence, 4), # 확신도 (예: 0.985)
         "probabilities": prob_dict, # {"normal": 0.015, "anomaly": 0.985}
         "severity": severity,

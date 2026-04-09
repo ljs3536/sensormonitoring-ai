@@ -64,7 +64,7 @@ async def train_model(
             # 학습 엔진 실행 (완료 후 생성된 tflite 파일의 절대/상대 경로 반환)
             if model_type.lower() in ["autoencoder","cnnlstmautoencoder"]:
                 file_path = run_unsupervised_training(s_type, m_type, train_days)
-            elif model_type.lower() in ["cnnlstm_classifier"]:
+            elif model_type.lower() in ["cnnlstm_classifier","spectogram_cnn"]:
                 file_path = run_supervised_training(s_type, m_type, train_days)
             # 성공 시 DB 업데이트
             model_record.status = "READY"
@@ -106,7 +106,7 @@ async def predict(model_id: int, data: list = Body(...), db: Session = Depends(g
         # run_inference 함수도 파라미터를 file_path를 받도록 수정해야 합니다.
         if model_record.model_type.lower() in ["autoencoder","cnnlstmautoencoder"]:
                 result_dict = run_unsupervised_inference(model_record.file_path, model_record.model_type, data)
-        elif model_record.model_type.lower() in ["cnnlstm_classifier"]:
+        elif model_record.model_type.lower() in ["cnnlstm_classifier","spectogram_cnn"]:
             result_dict = run_supervised_inference(model_record.file_path, model_record.model_type, data)
         
         print("결과 : ",result_dict)
