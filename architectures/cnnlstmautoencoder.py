@@ -1,6 +1,7 @@
 # sensor-ai/architectures/cnnlstmautoencoder.py
 import os
 import time
+import json
 import numpy as np
 import pandas as pd
 import torch
@@ -13,7 +14,7 @@ class CNNLSTMAutoEncoder(nn.Module):
     def __init__(self, seq_len=128, features=1):
         super(CNNLSTMAutoEncoder, self).__init__()
         
-        # [인코더] CNN: 국소적 특징 추출 및 길이 압축
+        # [인코더] CNN: 특징 추출 및 길이 압축 (128 -> 64 -> 32)
         self.encoder_cnn = nn.Sequential(
             nn.Conv1d(in_channels=features, out_channels=16, kernel_size=3, stride=2, padding=1),
             nn.ReLU(),
@@ -38,7 +39,7 @@ class CNNLSTMAutoEncoder(nn.Module):
         # 입력 차원: (batch, channels=1, seq_len=128)
         x = self.encoder_cnn(x)              # -> (batch, 32, 32)
         x = x.transpose(1, 2)                # -> (batch, 32, 32) (LSTM용 축 변환)
-        x, (hn, cn) = self.encoder_lstm(x)   # -> (batch, 32, 16)
+        x, _ = self.encoder_lstm(x)   # -> (batch, 32, 16)
         x, _ = self.decoder_lstm(x)          # -> (batch, 32, 32)
         x = x.transpose(1, 2)                # -> (batch, 32, 32) (CNN용 축 변환)
         x = self.decoder_cnn(x)              # -> (batch, 1, 128)
@@ -52,45 +53,49 @@ class CNNLSTMAutoEncoderTrainer:
 
     def train(self, df: pd.DataFrame) -> str:
         print(f"--- [TRAIN] {self.sensor_type} CNN-LSTM AutoEncoder 학습 시작 ---")
-        
+        # 센서 타입에 따른 특징(Features) 개수 설정
+        features = 3 if self.sensor_type.lower() == "adxl" else 1
+
         num_cols = df.select_dtypes(include=[np.number]).columns
-        if len(num_cols) == 0:
+        if len(num_cols) < features:
             raise ValueError("학습할 수 있는 숫자형 데이터가 없습니다.")
         
-        values = df[num_cols[0]].values 
-        
-        if len(values) < self.window_size:
-            raise ValueError(f"데이터가 너무 적습니다. (현재: {len(values)} / 필요: {self.window_size})")
+       # 2. 데이터 가공 및 Reshape (Conv1d용 차원 맞추기)
+        if features == 3:
+            vals = df[num_cols[:3]].values
+            num_windows = len(vals) // self.window_size
+            data_chopped = vals[:num_windows * self.window_size]
+            # (Batch, 128, 3) -> (Batch, 3, 128)
+            data_matrix = data_chopped.reshape(num_windows, self.window_size, 3).transpose(0, 2, 1)
+        else:
+            vals = df[num_cols[0]].values
+            num_windows = len(vals) // self.window_size
+            data_chopped = vals[:num_windows * self.window_size]
+            data_matrix = data_chopped.reshape(num_windows, 1, self.window_size)
 
-        num_windows = len(values) // self.window_size
-        data_chopped = values[:num_windows * self.window_size]
-        
-        # 1D CNN 입력을 위해 (데이터 수, 1채널, 128길이) 형태로 Reshape
-        data_matrix = data_chopped.reshape(-1, 1, self.window_size)
-
-        # Min-Max 스케일링
+        # 🌟 3. 정규화 및 텐서 변환
         max_val = np.max(np.abs(data_matrix))
         if max_val == 0: max_val = 1
         data_normalized = data_matrix / max_val
 
-        # PyTorch 텐서 변환
         tensor_x = torch.tensor(data_normalized, dtype=torch.float32)
         dataset = TensorDataset(tensor_x, tensor_x)
         dataloader = DataLoader(dataset, batch_size=32, shuffle=True)
 
-        model = CNNLSTMAutoEncoder(seq_len=self.window_size)
+        # 🌟 4. 모델 초기화 (features 전달)
+        model = CNNLSTMAutoEncoder(seq_len=self.window_size, features=features)
         criterion = nn.MSELoss() 
         optimizer = optim.Adam(model.parameters(), lr=0.001)
 
+        # 5. 학습 루프
         epochs = 20
         model.train()
-        
         for epoch in range(epochs):
             total_loss = 0
-            for batch_x, batch_y in dataloader:
+            for batch_x, _ in dataloader:
                 optimizer.zero_grad()
                 outputs = model(batch_x)
-                loss = criterion(outputs, batch_y)
+                loss = criterion(outputs, batch_x)
                 loss.backward()
                 optimizer.step()
                 total_loss += loss.item()
@@ -98,12 +103,19 @@ class CNNLSTMAutoEncoderTrainer:
             if (epoch + 1) % 5 == 0:
                 print(f"Epoch [{epoch+1}/{epochs}], Loss: {total_loss/len(dataloader):.6f}")
 
+        # 6. 저장 (모델 + 매핑 정보)
         model_dir = "models"
         os.makedirs(model_dir, exist_ok=True)
-        file_name = f"{self.sensor_type}_cnnlstm_ae_{int(time.time())}.pt"
+        timestamp = int(time.time())
+        file_name = f"{self.sensor_type}_cnnlstm_ae_{timestamp}.pt"
         file_path = os.path.join(model_dir, file_name)
         
         torch.save(model.state_dict(), file_path)
-        print(f"--- [TRAIN] 하이브리드 모델 생성 완료! 저장 위치: {file_path} ---")
+        
+        # 예측 시 일관성을 위한 매핑 파일
+        mapping_path = os.path.join(model_dir, f"{self.sensor_type}_cnnlstm_ae_{timestamp}_mapping.json")
+        with open(mapping_path, 'w') as f:
+            json.dump({"max_val": float(max_val)}, f)
 
+        print(f"--- [SUCCESS] 하이브리드 모델 저장 완료: {file_path} ---")
         return file_path

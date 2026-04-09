@@ -37,8 +37,9 @@ class CNNLSTMClassifier(nn.Module):
         )
 
     def forward(self, x):
+        # x shape: (batch, features, 128)
         x = self.encoder_cnn(x)              # -> (batch, 32, 32)
-        x = x.transpose(1, 2)                # -> (batch, 32, 32)
+        x = x.transpose(1, 2)                # -> (batch, 32, 32) (LSTM은 배치를 제외하고 [길이, 특징] 순서를 기대함)
         x, _ = self.encoder_lstm(x)          # -> (batch, 32, 16)
         x = self.flatten(x)                  # -> (batch, 512)
         x = self.classifier(x)               # -> (batch, num_classes)
@@ -53,6 +54,9 @@ class CNNLSTMClassifierTrainer:
     def train(self, df: pd.DataFrame) -> str:
         print(f"--- [TRAIN] {self.sensor_type} CNN-LSTM Classifier 지도 학습 시작 ---")
         
+        # 센서 타입에 따른 특징(Features) 개수 설정
+        features = 3 if self.sensor_type.lower() == "adxl" else 1
+
         # 1. 라벨(정답지) 전처리
         if 'label' not in df.columns:
             raise ValueError("지도 학습을 위해서는 'label' 컬럼이 반드시 필요합니다.")
@@ -66,27 +70,30 @@ class CNNLSTMClassifierTrainer:
         num_cols = df.select_dtypes(include=[np.number]).columns
         if len(num_cols) == 0:
             raise ValueError("학습할 수 있는 숫자형 데이터가 없습니다.")
-        
-        values = df[num_cols[0]].values
+        if features == 3:
+            values = df[num_cols[:3]].values
+            num_windows = len(values) // self.window_size
+            data_chopped = values[:num_windows * self.window_size]
+            data_matrix = data_chopped.reshape(num_windows, self.window_size, 3).transpose(0, 2, 1)
+        else:
+            values = df[num_cols[0]].values
+            num_windows = len(values) // self.window_size
+            data_chopped = values[:num_windows * self.window_size]
+            data_matrix = data_chopped.reshape(-1, 1, self.window_size)
+
+            
         labels = df['label'].map(label_to_index).values # 문자를 숫자로 바꾼 배열
         
         if len(values) < self.window_size:
             raise ValueError(f"데이터가 너무 적습니다. (현재: {len(values)})")
 
-        num_windows = len(values) // self.window_size
-        data_chopped = values[:num_windows * self.window_size]
-        
         # 여기서 중요한 점: 각 128개 묶음마다 정답(label)이 1개 필요함
-        
         labels_chopped = labels[:num_windows * self.window_size]
         labels_matrix = labels_chopped.reshape(-1, self.window_size)
         # stats.mode는 매트릭스의 각 행(axis=1)에서 가장 흔한 값을 찾습니다.
         mode_result = stats.mode(labels_matrix, axis=1, keepdims=False)
-        final_labels = mode_result.mode
-        # 가장 간단한 방법: 128개 묶음의 가장 마지막 데이터의 라벨을 그 묶음의 정답으로 사용
-        #final_labels = labels_matrix[:, -1] # (데이터 수,) 형태의 정답지
+        final_labels = mode_result.mode.flatten()
         
-        data_matrix = data_chopped.reshape(-1, 1, self.window_size)
 
         # Min-Max 스케일링
         max_val = np.max(np.abs(data_matrix))
@@ -100,9 +107,13 @@ class CNNLSTMClassifierTrainer:
         dataset = TensorDataset(tensor_x, tensor_y) # 입력과 정답이 다름 (X, Y)
         dataloader = DataLoader(dataset, batch_size=32, shuffle=True)
 
-        # 모델 초기화 (클래스 개수에 맞춰서)
-        model = CNNLSTMClassifier(seq_len=self.window_size, num_classes=len(unique_labels))
-        
+        # 🌟 3. 모델 생성 시 features 값 전달
+        model = CNNLSTMClassifier(
+            seq_len=self.window_size, 
+            features=features, # 👈 여기서 1 또는 3이 전달됨!
+            num_classes=len(unique_labels)
+        )
+
         # 지도 학습(분류)의 핵심: 오차 계산을 CrossEntropyLoss로 변경!
         criterion = nn.CrossEntropyLoss() 
         optimizer = optim.Adam(model.parameters(), lr=0.001)
@@ -123,6 +134,7 @@ class CNNLSTMClassifierTrainer:
             if (epoch + 1) % 5 == 0:
                 print(f"Epoch [{epoch+1}/{epochs}], Loss: {total_loss/len(dataloader):.6f}")
 
+        # 🌟 저장 로직 부분 수정
         model_dir = "models"
         os.makedirs(model_dir, exist_ok=True)
         timestamp = int(time.time())
@@ -131,17 +143,16 @@ class CNNLSTMClassifierTrainer:
         
         torch.save(model.state_dict(), file_path)
         
-        # 나중에 Predict 할 때 숫자를 다시 문자로 바꾸기 위해 매핑 정보도 같이 저장해 줍니다.
-        # 나중에 Predict 할 때 똑같은 비율로 스케일링하기 위해 max_val도 같이 저장!
-        mapping_path = os.path.join(model_dir, f"{self.sensor_type}_cnnlstm_classifier_{timestamp}_mapping.json")
+        # 🌟 매핑 정보 저장 시 model_type을 명시합니다.
+        mapping_path = file_path.replace(".pt", "_mapping.json")
         with open(mapping_path, 'w') as f:
             index_to_label = {idx: label for label, idx in label_to_index.items()}
-            # 라벨 딕셔너리와 max_val을 하나로 묶어서 저장합니다.
             save_data = {
                 "index_to_label": index_to_label,
-                "max_val": float(max_val)  # numpy float은 json 직렬화가 안 되므로 float() 씌움
+                "max_val": float(max_val),
+                "model_type": "cnnlstm_classifier" # 👈 추론 엔진의 자동 분기를 위해 추가
             }
             json.dump(save_data, f)
 
-        print(f"--- [TRAIN] 분류 모델 생성 완료! 저장 위치: {file_path} ---")
+        print(f"--- [TRAIN] 모델 생성 완료! 저장 위치: {file_path} ---")
         return file_path

@@ -64,7 +64,7 @@ async def train_model(
             # 학습 엔진 실행 (완료 후 생성된 tflite 파일의 절대/상대 경로 반환)
             if model_type.lower() in ["autoencoder","cnnlstmautoencoder"]:
                 file_path = run_unsupervised_training(s_type, m_type, train_days)
-            elif model_type.lower() in ["cnnlstm_classifier","spectogram_cnn"]:
+            elif model_type.lower() in ["cnnlstm_classifier","spectrogram_cnn"]:
                 file_path = run_supervised_training(s_type, m_type, train_days)
             # 성공 시 DB 업데이트
             model_record.status = "READY"
@@ -89,10 +89,8 @@ async def train_model(
 
 
 @app.post("/predict")
-async def predict(model_id: int, data: list = Body(...), db: Session = Depends(get_db)):
-    """
-    이제 predict는 sensor_type 대신 model_id를 받습니다!
-    """
+async def predict(sensor_type: str, model_id: int, data: list = Body(...), db: Session = Depends(get_db)):
+
     # 1. DB에서 모델 정보(파일 경로) 조회
     model_record = db.query(AiModel).filter(AiModel.id == model_id).first()
     
@@ -100,18 +98,19 @@ async def predict(model_id: int, data: list = Body(...), db: Session = Depends(g
         raise HTTPException(status_code=404, detail="모델을 찾을 수 없습니다.")
     if model_record.status != "READY":
         raise HTTPException(status_code=400, detail="모델이 아직 학습 중이거나 에러 상태입니다.")
-
+    print(model_record.model_type.lower())
     try:
         # 2. 파일 경로를 예측 엔진에 넘겨서 추론 실행
         # run_inference 함수도 파라미터를 file_path를 받도록 수정해야 합니다.
         if model_record.model_type.lower() in ["autoencoder","cnnlstmautoencoder"]:
-                result_dict = run_unsupervised_inference(model_record.file_path, model_record.model_type, data)
-        elif model_record.model_type.lower() in ["cnnlstm_classifier","spectogram_cnn"]:
-            result_dict = run_supervised_inference(model_record.file_path, model_record.model_type, data)
+                result_dict = run_unsupervised_inference(sensor_type,model_record.file_path, model_record.model_type, data)
+        elif model_record.model_type.lower() in ["cnnlstm_classifier","spectrogram_cnn"]:
+            result_dict = run_supervised_inference(sensor_type,model_record.file_path, model_record.model_type, data)
         
         print("결과 : ",result_dict)
         return result_dict
     except Exception as e:
+        print(f"❌ [PREDICT ERROR]: {str(e)}") 
         return {"error": str(e)}
     
 @app.get("/models")
@@ -132,11 +131,11 @@ async def delete_model(model_id: int, db: Session = Depends(get_db)):
     
     if not model_record:
         raise HTTPException(status_code=404, detail="모델을 찾을 수 없거나 이미 삭제되었습니다.")
-    
+    print(model_record.id, "|" , model_record.is_deleted)
     try:
         # 🌟 논리 삭제 실행
         model_record.is_deleted = True
-        model_record.deleted_at = datetime.now()
+        model_record.deleted_at = datetime.datetime.now()
         model_record.status = "DELETED" 
         
         db.commit()
@@ -145,6 +144,7 @@ async def delete_model(model_id: int, db: Session = Depends(get_db)):
 
     except Exception as e:
         db.rollback()
+        print(f"❌ DELETE ERROR 상세내용: {str(e)}")
         raise HTTPException(status_code=500, detail="삭제 처리 중 서버 오류 발생")
 
 @app.get("/status")

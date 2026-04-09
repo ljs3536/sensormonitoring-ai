@@ -43,7 +43,7 @@ def run_supervised_training(sensor_type: str, model_type: str, days: int):
         model_path = trainer.train(df)
     
     # 나중에 추가할 모델들 예약 자리!
-    elif model_type.lower() == "spectogram_cnn":
+    elif model_type.lower() == "spectrogram_cnn":
         trainer = SpectrogramCNNTrainer(sensor_type)
         model_path = trainer.train(df)
     # elif model_type.lower() == "timeseries_transformer":
