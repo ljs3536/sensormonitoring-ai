@@ -57,24 +57,42 @@ class CNNLSTMAutoEncoderTrainer:
         features = 3 if self.sensor_type.lower() == "adxl" else 1
 
         num_cols = df.select_dtypes(include=[np.number]).columns
-        if len(num_cols) < features:
-            raise ValueError("학습할 수 있는 숫자형 데이터가 없습니다.")
         
        # 2. 데이터 가공 및 Reshape (Conv1d용 차원 맞추기)
         if features == 3:
-            vals = df[num_cols[:3]].values
-            num_windows = len(vals) // self.window_size
-            data_chopped = vals[:num_windows * self.window_size]
+            adxl_cols = ['x', 'y', 'z']
+            if all(col in df.columns for col in adxl_cols):
+                values = df[adxl_cols].values # (N, 3)
+            else:
+                # 컬럼명이 다를 경우 숫자형 중 뒤에서 3개를 가져온다 
+                num_cols = df.select_dtypes(include=[np.number]).columns
+                values = df[num_cols[-3:]].values
+            num_windows = len(values) // self.window_size
+            data_chopped = values[:num_windows * self.window_size]
             # (Batch, 128, 3) -> (Batch, 3, 128)
             data_matrix = data_chopped.reshape(num_windows, self.window_size, 3).transpose(0, 2, 1)
         else:
-            vals = df[num_cols[0]].values
-            num_windows = len(vals) // self.window_size
-            data_chopped = vals[:num_windows * self.window_size]
+            if 'value' in df.columns:
+                values = df['value'].values
+            elif '_value' in df.columns:
+                values = df['_value'].values
+            else:
+                # pivot 결과에서 result, table 등을 피하기 위해 가장 마지막 숫자 컬럼을 선택
+                num_cols = df.select_dtypes(include=[np.number]).columns
+                values = df[num_cols[-1]].values
+            num_windows = len(values) // self.window_size
+            data_chopped = values[:num_windows * self.window_size]
             data_matrix = data_chopped.reshape(num_windows, 1, self.window_size)
 
+        if len(num_cols) < features:
+            raise ValueError("학습할 수 있는 숫자형 데이터가 없습니다.")
+        
+
+        # 💡 디버깅용 로그: 진짜 데이터가 들어왔는지 확인
+        print(f"✅ 추출된 데이터 샘플: {values[:5]}")
         # 🌟 3. 정규화 및 텐서 변환
         max_val = np.max(np.abs(data_matrix))
+        print(f"🔥 최종 확인된 max_val: {max_val}")
         if max_val == 0: max_val = 1
         data_normalized = data_matrix / max_val
 
