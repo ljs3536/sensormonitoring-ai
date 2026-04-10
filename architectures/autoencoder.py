@@ -17,12 +17,12 @@ class SensorAutoEncoder(nn.Module):
         self.encoder = nn.Sequential(
             nn.Linear(input_size, 64),
             nn.ReLU(),
-            nn.Linear(64, 16),
+            nn.Linear(64, 32),
             nn.ReLU()
         )
         # 디코더: 압축된 패턴을 다시 원래 데이터로 복원 시도
         self.decoder = nn.Sequential(
-            nn.Linear(16, 64),
+            nn.Linear(32, 64),
             nn.ReLU(),
             nn.Linear(64, input_size)
         )
@@ -46,28 +46,48 @@ class AutoEncoderTrainer:
 
         # 1. 데이터 전처리 (DataFrame에서 숫자 데이터만 추출)
         # 보통 InfluxDB에서 가져오면 '_value' 컬럼이나 'value', 'x', 'y' 등이 있습니다.
-        num_cols = df.select_dtypes(include=[np.number]).columns
+
+        print("📊 현재 DataFrame의 컬럼들:", df.columns.tolist())
+        print(df.head())
+        # 🌟 2. 데이터 가공 (ADXL은 X,Y,Z를 한 줄로 이어 붙임)
+        if features == 3:
+            # ADXL: x, y, z 컬럼을 찾습니다.
+            # pivot 이후에는 _value가 아니라 x, y, z가 컬럼명입니다.
+            adxl_cols = ['x', 'y', 'z']
+            if all(col in df.columns for col in adxl_cols):
+                values = df[adxl_cols].values # (N, 3)
+            else:
+                # 컬럼명이 다를 경우 숫자형 중 뒤에서 3개를 가져옵니다.
+                num_cols = df.select_dtypes(include=[np.number]).columns
+                values = df[num_cols[-3:]].values
+                
+            num_windows = len(values) // self.window_size
+            data_chopped = values[:num_windows * self.window_size]
+            data_matrix = data_chopped.reshape(num_windows, -1)
+            
+        else:
+            # Piezo: 보통 'value'라는 이름으로 필드가 생성됩니다.
+            if 'value' in df.columns:
+                values = df['value'].values
+            elif '_value' in df.columns:
+                values = df['_value'].values
+            else:
+                # pivot 결과에서 result, table 등을 피하기 위해 가장 마지막 숫자 컬럼을 선택
+                num_cols = df.select_dtypes(include=[np.number]).columns
+                values = df[num_cols[-1]].values
+
+            num_windows = len(values) // self.window_size
+            data_chopped = values[:num_windows * self.window_size]
+            data_matrix = data_chopped.reshape(-1, self.window_size)
+
         if len(num_cols) == 0:
             raise ValueError("학습할 수 있는 숫자형 데이터가 없습니다.")
         
-        # 🌟 2. 데이터 가공 (ADXL은 X,Y,Z를 한 줄로 이어 붙임)
-        if features == 3:
-            # ADXL: [X, Y, Z] 3개 컬럼을 가져옴
-            values = df[num_cols[:3]].values 
-            num_windows = len(values) // self.window_size
-            data_chopped = values[:num_windows * self.window_size]
-            # (num_windows, 128, 3) -> (num_windows, 384) 형태로 펼침 (Linear 레이어 입력용)
-            data_matrix = data_chopped.reshape(num_windows, -1)
-        else:
-            # Piezo: 1개 컬럼만 가져옴
-            values = df[num_cols[0]].values
-            num_windows = len(values) // self.window_size
-            data_chopped = values[:num_windows * self.window_size]
-            # (num_windows, 128)
-            data_matrix = data_chopped.reshape(-1, self.window_size)
-
+        # 💡 디버깅용 로그: 진짜 데이터가 들어왔는지 확인
+        print(f"✅ 추출된 데이터 샘플: {values[:5]}")
         # 🌟 3. 정규화 및 텐서 변환
         max_val = np.max(np.abs(data_matrix))
+        print(f"🔥 최종 확인된 max_val: {max_val}")
         if max_val == 0: max_val = 1
         data_normalized = data_matrix / max_val
 
@@ -81,7 +101,7 @@ class AutoEncoderTrainer:
         optimizer = optim.Adam(model.parameters(), lr=0.001)
 
         # 5. 학습 루프
-        epochs = 20
+        epochs = 500
         model.train()
         for epoch in range(epochs):
             total_loss = 0
@@ -109,6 +129,6 @@ class AutoEncoderTrainer:
         mapping_path = os.path.join(model_dir, f"{self.sensor_type}_autoencoder_{timestamp}_mapping.json")
         with open(mapping_path, 'w') as f:
             json.dump({"max_val": float(max_val)}, f)
-
+        print("max_val : ", max_val)
         print(f"--- [TRAIN] 모델 생성 완료! 저장 위치: {file_path} ---")
         return file_path

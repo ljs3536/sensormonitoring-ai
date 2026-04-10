@@ -77,18 +77,28 @@ def run_unsupervised_inference(sensor_type: str, file_path: str, model_type: str
     pointwise_error = np.abs(np.array(original_signal) - np.array(reconstructed_signal)).tolist()
 
     # 임계치 설정 (이 부분은 데이터에 따라 조정이 필요할 수 있습니다)
-    THRESHOLD = 0.5 
-    is_anomaly = mse > THRESHOLD
+    THRESHOLD = 0.17
+    # 기존: mse 기반 판단
+    #is_anomaly = mse > THRESHOLD
+    # 개선: 128개 지점 중 오차가 가장 큰 값을 확인
+    max_point_error = np.max(pointwise_error)
+    THRESHOLD_MAX = 0.8 # 이 수치는 테스트를 통해 조정
+
+    is_anomaly = (mse > THRESHOLD) or (max_point_error > THRESHOLD_MAX)
     anomaly_score = min(mse / (THRESHOLD * 2), 1.0)
+    mse_score = mse / (THRESHOLD * 2)
+    max_score = max_point_error / THRESHOLD_MAX
+    anomaly_score = min(max(mse_score, max_score), 1.0)
 
     severity = "SAFE"
-    if anomaly_score > 0.7: severity = "CRITICAL"
-    elif anomaly_score > 0.3: severity = "WARNING"
+    if anomaly_score > 0.8: severity = "CRITICAL" # 80% 이상이면 위험
+    elif anomaly_score > 0.4: severity = "WARNING" # 40% 이상이면 주의
 
     return {
         "learning_type": "unsupervised",
         "raw_mse": round(mse, 5),
         "threshold": THRESHOLD,
+        "model_type": model_type,
         "anomaly_score": round(anomaly_score, 4),
         "prediction": "abnormal" if is_anomaly else "normal",
         "severity": severity,
