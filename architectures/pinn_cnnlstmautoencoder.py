@@ -67,17 +67,33 @@ class PINN_CNNLSTMAutoEncoderTrainer:
         sampling_rate = sensor_metadata.get("sampling_rate", 1000) if sensor_metadata else 1000
         dt = 1.0 / sampling_rate
         # 스케일이 조정된 가상의 강성과 감쇠 계수
-        k = 0.5 
-        c = 0.1 
+        if self.sensor_type.lower() == "piezo":
+            k = 0.25  # 0.5 -> 0.25로 변경 (0.5의 제곱)
+        else:
+            k = 0.5   # ADXL은 x,y,z 주파수가 다르므로 일단 0.5 유지
+        c = 0.01 
         
         features = ["voltage"] if self.sensor_type == "piezo" else ["x", "y", "z"]
+
         raw_data = df[features].values
+
+        MAX_TRAIN_SAMPLES = 5000
+        if len(raw_data) > MAX_TRAIN_SAMPLES:
+            print(f"--- [INFO] 전체 {len(raw_data)}개 중 최신 {MAX_TRAIN_SAMPLES}개 데이터만 사용합니다. ---")
+            raw_data = raw_data[-MAX_TRAIN_SAMPLES:]
+
+  
+        print(f"✅ 추출된 데이터 최종 Shape: {raw_data.shape}") # (N, 1) 또는 (N, 3) 출력 확인
+        print(f"✅ 추출된 데이터 샘플: \n{raw_data[:5]}")
         
-        max_val = np.max(np.abs(raw_data))
-        if max_val == 0: max_val = 1.0
+        mean_val = np.mean(raw_data, axis=0)
+        centered_data = raw_data - mean_val
         
-        # 🌟 수정 3: Sigmoid용 0~1 정규화가 아닌, 진동에 맞는 -1~1 정규화
-        normalized_data = raw_data / max_val 
+        # 2. 중심이 0으로 맞춰진 상태에서 최대/최소 진폭을 구해 -1 ~ 1로 압축합니다.
+        max_val = np.max(np.abs(centered_data), axis=0)
+        max_val = np.where(max_val == 0, 1.0, max_val) # 0 나누기 방지
+        
+        normalized_data = centered_data / max_val 
 
         dataset = TimeSeriesDataset(normalized_data, self.seq_len)
         dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=True)
@@ -87,11 +103,19 @@ class PINN_CNNLSTMAutoEncoderTrainer:
         
         # 🌟 수정 4: 물리 손실 가중치 하향 조정
         # 초반에는 데이터 형태(Recon)부터 외우도록 물리 가중치를 아주 작게 줍니다.
-        physics_weight = 0.5 
+        physics_weight = 0.01
 
         self.model.train()
         for epoch in range(epochs):
             total_loss = 0
+            warmup_epochs = int(epochs * 0.3)
+            if epoch < warmup_epochs:
+                current_physics_weight = 0.0
+            else:
+                # 30% 이후부터 서서히 base_physics_weight(0.1)까지 증가
+                progress = (epoch - warmup_epochs) / (epochs - warmup_epochs)
+                current_physics_weight = physics_weight * progress
+
             for batch_x, in dataloader:
                 batch_x = batch_x.to(self.device)
                 optimizer.zero_grad()
@@ -101,7 +125,8 @@ class PINN_CNNLSTMAutoEncoderTrainer:
                 recon_loss = mse_loss_fn(batch_pred, batch_x)
                 physics_loss = self.calculate_physics_loss(batch_pred, dt, k, c)
                 
-                loss = recon_loss + (physics_weight * physics_loss)
+                # 점진적으로 증가하는 물리 가중치 적용
+                loss = recon_loss + (current_physics_weight * physics_loss)
                 
                 loss.backward()
                 optimizer.step()
@@ -119,6 +144,7 @@ class PINN_CNNLSTMAutoEncoderTrainer:
         
         mapping_path = os.path.join(model_dir, f"{self.sensor_type}_pinn_cnnlstmae_{timestamp}_mapping.json")
         with open(mapping_path, 'w') as f:
-            json.dump({"max_val": float(max_val), "k": float(k), "c": float(c)}, f)
+            json.dump({"mean_val": mean_val.tolist(), 
+                "max_val": max_val.tolist(), "k": float(k), "c": float(c)}, f)
 
         return file_path

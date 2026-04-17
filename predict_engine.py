@@ -200,10 +200,16 @@ def run_pinn_inference(sensor_type: str, file_path: str, input_data: list, senso
     # 1. 매핑 파일 로드 (학습 당시의 max_val 가져오기)
     mapping_path = file_path.replace(".pt", "_mapping.json")
     train_max_val = 1.0
+    train_mean_val = 2.124
+    train_k = 0.25
+    train_c = 0.01
     if os.path.exists(mapping_path):
         with open(mapping_path, 'r') as f:
             mapping_data = json.load(f)
             train_max_val = mapping_data.get("max_val", 1.0)
+            train_mean_val = mapping_data.get("mean_val", 2.124)
+            train_k = mapping_data.get("k", 0.25)
+            train_c = mapping_data.get("c", 0.01)
 
     is_adxl = sensor_type.lower() == "adxl"
     features = 3 if is_adxl else 1
@@ -214,18 +220,13 @@ def run_pinn_inference(sensor_type: str, file_path: str, input_data: list, senso
     model.eval() 
 
     # 3. 데이터 전처리
-    input_arr = np.array(input_data, dtype=np.float32)
-    input_normalized = input_arr / (train_max_val if train_max_val != 0 else 1.0)
 
-    # 🌟 이 아래 부분(if is_adxl: ~ else:)을 통째로 교체해주세요!
-    if is_adxl:
-        # ADXL (384개 데이터): (128, 3) 모양으로 만든 뒤, 배치 차원(unsqueeze) 추가 -> [1, 128, 3]
-        reshaped = input_normalized.reshape(128, 3)
-        tensor_x = torch.tensor(reshaped, dtype=torch.float32).unsqueeze(0)
-    else:
-        # Piezo (128개 데이터): (128, 1) 모양으로 만든 뒤, 배치 차원 추가 -> [1, 128, 1]
-        reshaped = input_normalized.reshape(128, 1)
-        tensor_x = torch.tensor(reshaped, dtype=torch.float32).unsqueeze(0)
+    input_arr = np.array(input_data, dtype=np.float32)
+    input_reshaped = input_arr.reshape(128, features)
+    input_normalized = (input_reshaped - train_mean_val) / train_max_val
+    
+    tensor_x = torch.tensor(input_normalized, dtype=torch.float32).unsqueeze(0)
+
     # 4. 모델 추론
     with torch.no_grad():
         output = model(tensor_x)
@@ -236,40 +237,36 @@ def run_pinn_inference(sensor_type: str, file_path: str, input_data: list, senso
     # 🌟 6. 물리 법칙 오차(Physics Error) 계산
     # sensor_meta가 넘어왔다면 해당 센서의 진짜 물리값을, 없으면 기본값을 사용합니다.
     sampling_rate = sensor_meta.get("sampling_rate", 1000) if sensor_meta else 1000
-    dt = 1.0 / sampling_rate
-    k = sensor_meta.get("k", 5.0) if sensor_meta else 5.0
-    c = sensor_meta.get("c", 0.5) if sensor_meta else 0.5
-    
+    norm_dt = 1.0
+
     # 중앙 차분법을 이용해 속도와 가속도를 구하고 물리 잔차를 계산합니다.
-    v = (output[:, 2:, :] - output[:, :-2, :]) / (2 * dt)
-    a = (output[:, 2:, :] - 2 * output[:, 1:-1, :] + output[:, :-2, :]) / (dt ** 2)
+    v = (output[:, 2:, :] - output[:, :-2, :]) / (2 * norm_dt)
+    a = (output[:, 2:, :] - 2 * output[:, 1:-1, :] + output[:, :-2, :]) / (norm_dt ** 2)
     x_inner = output[:, 1:-1, :]
     
-    residual = (1.0 * a) + (c * v) + (k * x_inner)
+    residual = (1.0 * a) + (train_c * v) + (train_k * x_inner)
     physics_error_tensor = (residual ** 2)
     
     # 스칼라 값으로 물리 손실 평균 추출
     physics_loss = torch.mean(physics_error_tensor).item()
 
     # 7. 차트 출력을 위한 데이터 평탄화 및 원본 스케일 복원
-    original_signal = (tensor_x.cpu().numpy().flatten() * train_max_val).tolist()
-    reconstructed_signal = (output.cpu().numpy().flatten() * train_max_val).tolist()
+    reconstructed_signal = (output.squeeze(0).cpu().numpy() * train_max_val + train_mean_val).flatten().tolist()
+    original_signal = input_arr.flatten().tolist()
     pointwise_error = np.abs(np.array(original_signal) - np.array(reconstructed_signal)).tolist()
     
     physics_residual_arr = physics_error_tensor.cpu().numpy().flatten().tolist()
     padded_physics_residual = [0.0] + physics_residual_arr + [0.0]
 
-    # 🌟 [수정할 곳 2] 임계치(Threshold) 현실화
-    # 스케일링된 데이터에 맞게 임계치를 대폭 낮춥니다.
-    THRESHOLD_MSE = 0.17   # 기존: 0.17 -> 수정: 0.05
-    THRESHOLD_PHYS = 6.50  # 기존: 50.0 -> 수정: 0.05
+    # 🌟 8. 임계치 설정 (정규화된 환경에 맞는 값)
+    THRESHOLD_MSE = 0.05
+    THRESHOLD_PHYS = 0.05 
     
     is_anomaly = (mse > THRESHOLD_MSE) or (physics_loss > THRESHOLD_PHYS)
     
     severity = "SAFE"
     if is_anomaly:
-        # 물리 법칙을 1.5배 이상 심하게 어기면 CRITICAL
-        severity = "CRITICAL" if (physics_loss > THRESHOLD_PHYS * 1.5) else "WARNING"
+        severity = "CRITICAL" if (physics_loss > THRESHOLD_PHYS * 2.0) else "WARNING"
 
     return {
         "learning_type": "pinn",
@@ -278,7 +275,7 @@ def run_pinn_inference(sensor_type: str, file_path: str, input_data: list, senso
         "model_type": "pinn_cnnlstmautoencoder",
         "prediction": "abnormal" if is_anomaly else "normal",
         "severity": severity,
-        "message": "물리 방정식 위반 (기계적 결함 의심)" if is_anomaly else "정상 (Physics Valid)",
+        "message": "기계적 이상 진동 감지" if is_anomaly else "정상 (Physics Valid)",
         "chart_data": {
             "original": original_signal,
             "reconstructed": reconstructed_signal,
