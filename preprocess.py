@@ -1,9 +1,31 @@
 # sensor-ai/preprocess.py
 import torch
+from torch.utils.data import Dataset
 import torchaudio
 import torchaudio.transforms as T
 import numpy as np
 
+class TimeSeriesDataset(Dataset):
+    """
+    1차원 또는 2차원 시계열 배열을 입력받아,
+    지정된 길이(seq_len)만큼씩 잘라서 파이토치 텐서로 뱉어주는 데이터셋 클래스입니다.
+    """
+    def __init__(self, data, seq_len=128):
+        self.data = data
+        self.seq_len = seq_len
+
+    def __len__(self):
+        # 전체 데이터 길이에서 창문(seq_len) 크기만큼을 뺀 횟수만큼 자를 수 있습니다.
+        return len(self.data) - self.seq_len + 1
+
+    def __getitem__(self, idx):
+        # idx 위치부터 seq_len 만큼 배열을 슬라이싱해서 텐서로 변환
+        window = self.data[idx : idx + self.seq_len]
+        
+        # DataLoader에서 튜플 형태로 받기 위해 쉼표(,)를 넣어 (배치데이터, ) 형태로 반환합니다.
+        # 비지도 학습(AutoEncoder)은 정답(Label)이 필요 없고 자기 자신이 정답이므로 하나만 반환합니다.
+        return (torch.tensor(window, dtype=torch.float32),)
+    
 class SpectrogramTransformer:
     def __init__(self, sample_rate=1000, n_fft=64, hop_length=16, n_mels=32): 
         self.sample_rate = sample_rate

@@ -7,12 +7,12 @@ import numpy as np
 import os
 import datetime
 from train_engine import run_unsupervised_training, run_supervised_training
-from predict_engine import run_unsupervised_inference, run_supervised_inference
+from predict_engine import run_unsupervised_inference, run_supervised_inference, run_pinn_inference
 
 # RDB 연동 모듈 임포트
 from database_rdb import get_db, SessionLocal
 from models import AiModel
-
+from sensors import Sensor
 # 스케줄러 추가
 from scheduler import scheduler
 
@@ -40,6 +40,7 @@ async def train_model(
     sensor_type: str, 
     model_type: str = "AutoEncoder", # 기본값 설정
     days: int = 7, 
+    sensor_id: str = None,
     background_tasks: BackgroundTasks = None,
     db: Session = Depends(get_db) # MariaDB 세션 주입 (이게 있어야 db.add가 작동합니다!)
 ):
@@ -62,10 +63,10 @@ async def train_model(
         
         try:
             # 학습 엔진 실행 (완료 후 생성된 tflite 파일의 절대/상대 경로 반환)
-            if model_type.lower() in ["autoencoder","cnnlstmautoencoder"]:
-                file_path = run_unsupervised_training(s_type, m_type, train_days)
+            if model_type.lower() in ["autoencoder","cnnlstmautoencoder", "pinn_cnnlstmautoencoder"]:
+                file_path = run_unsupervised_training(s_type, m_type, train_days, sensor_id)
             elif model_type.lower() in ["cnnlstm_classifier","spectrogram_cnn"]:
-                file_path = run_supervised_training(s_type, m_type, train_days)
+                file_path = run_supervised_training(s_type, m_type, train_days, sensor_id)
             # 성공 시 DB 업데이트
             model_record.status = "READY"
             model_record.file_path = file_path
@@ -89,7 +90,7 @@ async def train_model(
 
 
 @app.post("/predict")
-async def predict(sensor_type: str, model_id: int, data: list = Body(...), db: Session = Depends(get_db)):
+async def predict(sensor_type: str, model_id: int, sensor_id: str = None, data: list = Body(...), db: Session = Depends(get_db)):
 
     # 1. DB에서 모델 정보(파일 경로) 조회
     model_record = db.query(AiModel).filter(AiModel.id == model_id).first()
@@ -98,16 +99,37 @@ async def predict(sensor_type: str, model_id: int, data: list = Body(...), db: S
         raise HTTPException(status_code=404, detail="모델을 찾을 수 없습니다.")
     if model_record.status != "READY":
         raise HTTPException(status_code=400, detail="모델이 아직 학습 중이거나 에러 상태입니다.")
-    print(model_record.model_type.lower())
+    
+    model_type_lower = model_record.model_type.lower()
+    print(f"--- [PREDICT] 선택된 모델: {model_type_lower} ---")
+
     try:
-        # 2. 파일 경로를 예측 엔진에 넘겨서 추론 실행
-        # run_inference 함수도 파라미터를 file_path를 받도록 수정해야 합니다.
-        if model_record.model_type.lower() in ["autoencoder","cnnlstmautoencoder"]:
-                result_dict = run_unsupervised_inference(sensor_type,model_record.file_path, model_record.model_type, data)
-        elif model_record.model_type.lower() in ["cnnlstm_classifier","spectrogram_cnn"]:
-            result_dict = run_supervised_inference(sensor_type,model_record.file_path, model_record.model_type, data)
+        # 🌟 2-1. PINN 모델 전용 분기 (물리 정보 주입 필요)
+        if model_type_lower == "pinn_cnnlstmautoencoder":
+            sensor_meta = None
+            if sensor_id:
+                sensor_record = db.query(Sensor).filter(Sensor.id == sensor_id).first()
+                if sensor_record:
+                    # DB에서 해당 센서의 물리 상수 가져오기
+                    sensor_meta = {
+                        "sampling_rate": sensor_record.sampling_rate,
+                        "k": sensor_record.threshold_max or 5.0,
+                        "c": 0.5 # 임시 감쇠 계수
+                    }
+            # PINN 전용 엔진 호출
+            result_dict = run_pinn_inference(sensor_type, model_record.file_path, data, sensor_meta)
+
+        # 2-2. 일반 비지도 학습 모델 분기
+        elif model_type_lower in ["autoencoder", "cnnlstmautoencoder"]:
+            result_dict = run_unsupervised_inference(sensor_type, model_record.file_path, model_type_lower, data)
+            
+        # 2-3. 일반 지도 학습 모델 분기
+        elif model_type_lower in ["cnnlstm_classifier", "spectrogram_cnn"]:
+            result_dict = run_supervised_inference(sensor_type, model_record.file_path, model_type_lower, data)
         
-        print("결과 : ",result_dict)
+        else:
+            raise ValueError("지원하지 않는 모델 아키텍처입니다.")
+        
         return result_dict
     except Exception as e:
         print(f"❌ [PREDICT ERROR]: {str(e)}") 

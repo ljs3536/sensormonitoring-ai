@@ -15,16 +15,18 @@ class AIStore:
     # ---------------------------------------------------------
     # 1. 비지도 학습용 (AutoEncoder) - 정상 데이터만 쏙쏙 뽑기
     # ---------------------------------------------------------
-    def fetch_unsupervised_data(self, sensor_type, days=7):
-        """
-        [AutoEncoder 용도]
-        라벨이 'normal'이거나, 예전에 저장해서 라벨 자체가 없는(null) 데이터만 가져옵니다.
-        """
+    def fetch_unsupervised_data(self, sensor_type, days=7, sensor_id: str = None):
+
         query = f'''
             from(bucket: "{settings.influxdb_bucket}")
             |> range(start: -{days}d)
             |> filter(fn: (r) => r["_measurement"] == "{sensor_type}_sensor")
-            // 🔥 핵심: 라벨이 없거나(과거 데이터), 라벨이 'normal'인 것만 필터링!
+        '''
+
+        if sensor_id:
+            query += f'\n            |> filter(fn: (r) => r["sensor_id"] == "{sensor_id}")'
+            
+        query += '''
             |> filter(fn: (r) => not exists r["label"] or r["label"] == "normal")
             |> pivot(rowKey:["_time"], columnKey: ["_field"], valueColumn: "_value")
         '''
@@ -40,16 +42,19 @@ class AIStore:
     # ---------------------------------------------------------
     # 2. 지도 학습용 (Classification) - 라벨이 있는 모든 데이터 뽑기
     # ---------------------------------------------------------
-    def fetch_supervised_data(self, sensor_type, days=7):
-        """
-        [새로운 CNN-LSTM 분류기 용도]
-        정상/비정상 상관없이 '라벨(label)'이 명확하게 찍혀있는 모든 데이터를 가져옵니다.
-        """
+    def fetch_supervised_data(self, sensor_type, days=7, sensor_id: str = None):
+
         query = f'''
             from(bucket: "{settings.influxdb_bucket}")
             |> range(start: -{days}d)
             |> filter(fn: (r) => r["_measurement"] == "{sensor_type}_sensor")
-            // 🔥 핵심: 라벨(tag)이 존재하는(exists) 데이터만 싹 다 가져옴!
+        '''
+        
+        # 🌟 sensor_id가 주어지면 해당 태그 필터링 조건 추가
+        if sensor_id:
+            query += f'\n            |> filter(fn: (r) => r["sensor_id"] == "{sensor_id}")'
+            
+        query += '''
             |> filter(fn: (r) => exists r["label"])
             |> pivot(rowKey:["_time"], columnKey: ["_field"], valueColumn: "_value")
         '''
