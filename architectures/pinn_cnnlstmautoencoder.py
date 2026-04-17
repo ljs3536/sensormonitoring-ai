@@ -63,7 +63,7 @@ class PINN_CNNLSTMAutoEncoderTrainer:
         physics_loss = torch.mean(residual ** 2)
         return physics_loss
 
-    def train(self, df, epochs=50, batch_size=32, sensor_metadata=None):
+    def train(self, df, epochs=50, batch_size=128, sensor_metadata=None):
         sampling_rate = sensor_metadata.get("sampling_rate", 1000) if sensor_metadata else 1000
         dt = 1.0 / sampling_rate
         # 스케일이 조정된 가상의 강성과 감쇠 계수
@@ -77,10 +77,10 @@ class PINN_CNNLSTMAutoEncoderTrainer:
 
         raw_data = df[features].values
 
-        MAX_TRAIN_SAMPLES = 5000
-        if len(raw_data) > MAX_TRAIN_SAMPLES:
-            print(f"--- [INFO] 전체 {len(raw_data)}개 중 최신 {MAX_TRAIN_SAMPLES}개 데이터만 사용합니다. ---")
-            raw_data = raw_data[-MAX_TRAIN_SAMPLES:]
+        # MAX_TRAIN_SAMPLES = 5000
+        # if len(raw_data) > MAX_TRAIN_SAMPLES:
+        #     print(f"--- [INFO] 전체 {len(raw_data)}개 중 최신 {MAX_TRAIN_SAMPLES}개 데이터만 사용합니다. ---")
+        #     raw_data = raw_data[-MAX_TRAIN_SAMPLES:]
 
   
         print(f"✅ 추출된 데이터 최종 Shape: {raw_data.shape}") # (N, 1) 또는 (N, 3) 출력 확인
