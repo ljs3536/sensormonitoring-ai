@@ -113,8 +113,8 @@ async def predict(sensor_type: str, model_id: int, sensor_id: str = None, data: 
                     # DB에서 해당 센서의 물리 상수 가져오기
                     sensor_meta = {
                         "sampling_rate": sensor_record.sampling_rate,
-                        "k": sensor_record.threshold_max or 5.0,
-                        "c": 0.5 # 임시 감쇠 계수
+                        "k": sensor_record.physics_k or 0.5,
+                        "c": sensor_record.physics_c or 0.01 # 임시 감쇠 계수
                     }
             # PINN 전용 엔진 호출
             result_dict = run_pinn_inference(sensor_type, model_record.file_path, data, sensor_meta)

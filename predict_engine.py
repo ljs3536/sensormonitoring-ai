@@ -96,7 +96,7 @@ def run_unsupervised_inference(sensor_type: str, file_path: str, model_type: str
     severity = "SAFE"
     if anomaly_score > 0.8: severity = "CRITICAL" # 80% 이상이면 위험
     elif anomaly_score > 0.4: severity = "WARNING" # 40% 이상이면 주의
-
+    
     return {
         "learning_type": "unsupervised",
         "raw_mse": round(mse, 5),
@@ -201,15 +201,18 @@ def run_pinn_inference(sensor_type: str, file_path: str, input_data: list, senso
     mapping_path = file_path.replace(".pt", "_mapping.json")
     train_max_val = 1.0
     train_mean_val = 2.124
-    train_k = 0.25
-    train_c = 0.01
+
     if os.path.exists(mapping_path):
         with open(mapping_path, 'r') as f:
             mapping_data = json.load(f)
             train_max_val = mapping_data.get("max_val", 1.0)
             train_mean_val = mapping_data.get("mean_val", 2.124)
-            train_k = mapping_data.get("k", 0.25)
-            train_c = mapping_data.get("c", 0.01)
+
+    
+    current_k = sensor_meta.get("k", 0.25) if sensor_meta else 0.25
+    current_c = sensor_meta.get("c", 0.01) if sensor_meta else 0.01
+
+    sampling_rate = sensor_meta.get("sampling_rate", 1000) if sensor_meta else 1000
 
     is_adxl = sensor_type.lower() == "adxl"
     features = 3 if is_adxl else 1
@@ -244,34 +247,59 @@ def run_pinn_inference(sensor_type: str, file_path: str, input_data: list, senso
     a = (output[:, 2:, :] - 2 * output[:, 1:-1, :] + output[:, :-2, :]) / (norm_dt ** 2)
     x_inner = output[:, 1:-1, :]
     
-    residual = (1.0 * a) + (train_c * v) + (train_k * x_inner)
-    physics_error_tensor = (residual ** 2)
+    residual = (1.0 * a) + (current_c * v) + (current_k * x_inner)
     
-    # 스칼라 값으로 물리 손실 평균 추출
-    physics_loss = torch.mean(physics_error_tensor).item()
-
+    # 각 시점별 물리 오차 (차트용 텐서)
+    physics_error_tensor = residual ** 2
+    
     # 7. 차트 출력을 위한 데이터 평탄화 및 원본 스케일 복원
     reconstructed_signal = (output.squeeze(0).cpu().numpy() * train_max_val + train_mean_val).flatten().tolist()
     original_signal = input_arr.flatten().tolist()
     pointwise_error = np.abs(np.array(original_signal) - np.array(reconstructed_signal)).tolist()
     
-    physics_residual_arr = physics_error_tensor.cpu().numpy().flatten().tolist()
+    # 🌟 수정: physics_loss(float) 대신 physics_error_tensor(Tensor)를 사용
+    # 중앙 차분법으로 인해 길이가 126이므로, 앞뒤에 0을 채워 128로 맞춤
+    physics_residual_arr = physics_error_tensor.squeeze().cpu().numpy().flatten().tolist()
     padded_physics_residual = [0.0] + physics_residual_arr + [0.0]
 
-    # 🌟 8. 임계치 설정 (정규화된 환경에 맞는 값)
-    THRESHOLD_MSE = 0.05
-    THRESHOLD_PHYS = 0.05 
+    # 1. 평균 손실 (기존 유지 - 전체적인 흐름 파악용)
+    physics_loss_mean = torch.mean(physics_error_tensor).item()
     
-    is_anomaly = (mse > THRESHOLD_MSE) or (physics_loss > THRESHOLD_PHYS)
+    # 2. 최대 손실 (스파이크 감지용 🌟)
+    physics_loss_max = torch.max(physics_error_tensor).item()
+
+    physics_loss_std = torch.std(physics_error_tensor).item() # 🌟 잔차의 불규칙성
+
+    # 🌟 8. 임계치 및 상태 판독 로직 수정
+    THRESHOLD_MSE = 0.05
+    THRESHOLD_PHYS_MEAN = 0.15 # 정상 노이즈를 고려해 약간 상향
+    THRESHOLD_PHYS_MAX = 0.30  # 튀는 값(스파이크)을 잡기 위한 임계치
+    
+    baseScore = 100 - (physics_loss_mean * 100); 
+    excess = max(0.0, float(physics_loss_max - THRESHOLD_PHYS_MAX))
+    penalty = (excess ** 2) * 200
+    integrity = max(0.0, float(baseScore - penalty))
+
+    # 평균이 높거나, 단 하나라도 크게 튀면 이상으로 간주
+    is_anomaly = (mse > THRESHOLD_MSE) or \
+                 (physics_loss_mean > THRESHOLD_PHYS_MEAN) or \
+                 (physics_loss_max > THRESHOLD_PHYS_MAX)
     
     severity = "SAFE"
     if is_anomaly:
-        severity = "CRITICAL" if (physics_loss > THRESHOLD_PHYS * 2.0) else "WARNING"
+        # 최대값이 임계치를 크게 상회하면 CRITICAL
+        if physics_loss_max > THRESHOLD_PHYS_MAX * 3.0 or mse > THRESHOLD_MSE * 5:
+            severity = "CRITICAL"
+        else:
+            severity = "WARNING"
 
     return {
         "learning_type": "pinn",
         "raw_mse": round(mse, 5),
-        "physics_loss": round(physics_loss, 5),
+        "integrity": round(integrity,5),
+        "physics_loss": round(physics_loss_mean, 5),
+        "physics_loss_max": round(physics_loss_max, 5),
+        "physics_loss_std": round(physics_loss_std, 5),
         "model_type": "pinn_cnnlstmautoencoder",
         "prediction": "abnormal" if is_anomaly else "normal",
         "severity": severity,

@@ -17,7 +17,7 @@ from database_rdb import SessionLocal
 db = AIStore()
 
 def get_sensor_metadata(sensor_id: str):
-    """MariaDB에서 센서의 물리 정보를 가져옵니다."""
+    """MariaDB에서 해당 센서의 물리 정보를 가져옵니다."""
     if not sensor_id: return None
     db_session = SessionLocal()
     try:
@@ -46,10 +46,10 @@ def run_unsupervised_training(sensor_type: str, model_type: str, days: int, sens
         trainer = CNNLSTMAutoEncoderTrainer(sensor_type)
         model_path = trainer.train(df)
     elif model_type.lower() == "pinn_cnnlstmautoencoder":
-        sensor_meta = get_sensor_metadata(sensor_id)
+
         trainer = PINN_CNNLSTMAutoEncoderTrainer(sensor_type)
         # 물리 파라미터를 함께 넘김
-        model_path = trainer.train(df, sensor_metadata=sensor_meta)
+        model_path = trainer.train(df)
 
     else:
         raise ValueError(f"지원하지 않는 비지도 모델 타입입니다: {model_type}")
