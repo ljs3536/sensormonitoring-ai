@@ -8,8 +8,6 @@ import os
 import time
 from torch.utils.data import DataLoader
 from preprocess import TimeSeriesDataset
-from sensors import Sensor
-from database_rdb import SessionLocal
 
 class PINN_CNNLSTMAutoEncoder(nn.Module):
     def __init__(self, seq_len=128, features=1):
@@ -62,35 +60,14 @@ class PINN_CNNLSTMAutoEncoderTrainer:
         # 여기서 k, c가 상수가 아니라 각 샘플에 맞는 텐서값이 곱해짐
         residual = (m * a) + (c_tensor * v) + (k_tensor * x_inner)
         return torch.mean(residual ** 2)
-    
-    def get_all_sensor_metadata(self, sensor_type: str):
-        """MariaDB에서 해당 센서 타입의 전체 물리 정보(k, c)를 가져와 딕셔너리로 변환합니다."""
-        db_session = SessionLocal()
-        try:
-            # 해당 타입의 모든 센서 조회
-            sensors = db_session.query(Sensor).filter(Sensor.type == sensor_type).all()
-            # sensor_id를 Key로 하는 딕셔너리 생성
-            meta_map = {}
-            for s in sensors:
-                meta_map[s.id] = {
-                    "k": float(s.physics_k) if hasattr(s, 'k') and s.k else 0.5,
-                    "c": float(s.physics_c) if hasattr(s, 'c') and s.c else 0.01,
-                    "sampling_rate": s.sampling_rate or 1000
-                }
-            return meta_map
-        finally:
-            db_session.close()
 
-    def train(self, df, epochs=50, batch_size=128):
-        # 1. 모든 센서 메타데이터 로드
-        meta_map = self.get_all_sensor_metadata(self.sensor_type)
+    def train(self, df, sensor_meta_map: dict, epochs=50, batch_size=128):
         
-        # sensor_id 컬럼을 기반으로 k, c 매핑
         if 'sensor_id' not in df.columns:
             raise ValueError("DataFrame에 'sensor_id' 컬럼이 없습니다. InfluxDB 태그 설정을 확인하세요.")
             
-        df['k'] = df['sensor_id'].map(lambda x: meta_map.get(x, {}).get('k', 0.5))
-        df['c'] = df['sensor_id'].map(lambda x: meta_map.get(x, {}).get('c', 0.01))
+        df['k'] = df['sensor_id'].map(lambda x: sensor_meta_map.get(x, {}).get('k', 0.5))
+        df['c'] = df['sensor_id'].map(lambda x: sensor_meta_map.get(x, {}).get('c', 0.01))
         print(df)
         data_features = ["voltage"] if self.sensor_type == "piezo" else ["x", "y", "z"]
         physics_features = ["k", "c"]
@@ -116,7 +93,7 @@ class PINN_CNNLSTMAutoEncoderTrainer:
         
         # 공통 dt (센서마다 크게 다르다면 이 또한 배치별로 넘겨야 함)
         # 여기서는 메타데이터 중 첫 번째 값 혹은 기본값을 사용
-        base_sr = list(meta_map.values())[0]['sampling_rate'] if meta_map else 1000
+        base_sr = list(sensor_meta_map.values())[0]['sampling_rate'] if sensor_meta_map else 1000
         dt = 1.0 / base_sr
 
         self.model.train()

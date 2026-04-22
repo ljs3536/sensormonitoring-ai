@@ -16,6 +16,7 @@ from sensors import Sensor
 # 스케줄러 추가
 from scheduler import scheduler
 from architectures.calibration_pinn import InversePINN_CalibratorTrainer
+from services.model_service import ModelService, SensorService
 
 app = FastAPI()
 influx_store = AIStore() # DB 클라이언트 인스턴스 생성
@@ -46,15 +47,8 @@ async def train_model(
     db: Session = Depends(get_db) # MariaDB 세션 주입 (이게 있어야 db.add가 작동합니다!)
 ):
     # 1. 학습 시작 전 DB에 'TRAINING' 상태로 레코드 생성
-    new_model = AiModel(
-        sensor_type=sensor_type,
-        model_type=model_type,
-        status="TRAINING"
-    )
-    db.add(new_model)
-    db.commit()
-    db.refresh(new_model)
-    model_id = new_model.id # 생성된 ID 가져오기
+    # Service 호출로 DB 생성 로직 위임
+    new_model = ModelService.create_training_record(db, sensor_type, model_type)
 
     # 2. 백그라운드 작업 정의
     def task(m_id, s_type, m_type, train_days):
@@ -83,10 +77,10 @@ async def train_model(
             db_session.close()
 
     # 3. 백그라운드 실행
-    background_tasks.add_task(task, model_id, sensor_type, model_type, days)
+    background_tasks.add_task(task, new_model.id, sensor_type, model_type, days)
     return {
         "message": f"{sensor_type} {model_type} 학습이 시작되었습니다.", 
-        "model_id": model_id
+        "model_id": new_model.id
     }
 
 
@@ -94,7 +88,7 @@ async def train_model(
 async def predict(sensor_type: str, model_id: int, sensor_id: str = None, data: list = Body(...), db: Session = Depends(get_db)):
 
     # 1. DB에서 모델 정보(파일 경로) 조회
-    model_record = db.query(AiModel).filter(AiModel.id == model_id).first()
+    model_record = ModelService.get_ready_model(db, model_id)
     
     if not model_record:
         raise HTTPException(status_code=404, detail="모델을 찾을 수 없습니다.")
@@ -105,7 +99,7 @@ async def predict(sensor_type: str, model_id: int, sensor_id: str = None, data: 
     print(f"--- [PREDICT] 선택된 모델: {model_type_lower} ---")
 
     try:
-        # 🌟 2-1. PINN 모델 전용 분기 (물리 정보 주입 필요)
+        # 2-1. PINN 모델 전용 분기 (물리 정보 주입 필요)
         if model_type_lower == "pinn_cnnlstmautoencoder":
             sensor_meta = None
             if sensor_id:
@@ -138,43 +132,18 @@ async def predict(sensor_type: str, model_id: int, sensor_id: str = None, data: 
 
 # API 엔드포인트 예시 스케치
 @app.post("/auto_tune")
-async def auto_tune_sensor(sensor_id: str, sensor_type: str = "piezo", days: int = 7):
+async def auto_tune_sensor(sensor_id: str, sensor_type: str = "piezo", days: int = 7, db: Session = Depends(get_db)):
     # 1. InfluxDB에서 해당 센서의 최근 정상 데이터(df)를 가져온다.
     df = influx_store.fetch_normal_data_from_influx(sensor_type=sensor_type, days=days, sensor_id=sensor_id)
     
     if df.empty:
         return {"status": "error", "message": "정상(normal) 데이터가 충분하지 않아 최적화를 진행할 수 없습니다."}
     
-    # 2. 캘리브레이터 실행 (sensor_type을 넘겨주어 piezo/adxl 구분)
-    trainer = InversePINN_CalibratorTrainer(sensor_type=sensor_type)
-    
-     # =========================================================
-    #  3. DB에서 최신 PINN 범용 모델 경로 자동 조회
-    # =========================================================
-    db_session = SessionLocal()
-    pretrained_model_path = None
-    try:
-        latest_model = (
-            db_session.query(AiModel)
-            .filter(
-                AiModel.sensor_type == sensor_type,
-                AiModel.model_type.ilike("pinn_cnnlstmautoencoder"), # 대소문자 무시 검색
-                AiModel.status == "READY", # 학습이 완료된 정상 모델만
-                AiModel.is_deleted == False # 삭제되지 않은 모델만
-            )
-            .order_by(AiModel.created_at.desc())
-            .first() # one()은 결과가 0개일 때 에러가 나므로 first() 사용
-        )
-        
-        if latest_model and latest_model.file_path:
-            pretrained_model_path = latest_model.file_path
-    except Exception as e:
-        print(f"[DB Error] 모델 조회 중 오류 발생: {e}")
-    finally:
-        db_session.close()
+    latest_model = ModelService.get_latest_pinn_model(db, sensor_type)
+    pretrained_path = latest_model.file_path if latest_model else None
 
-    # batch_size나 epoch는 데이터량에 따라 조절 가능
-    best_k, best_c = trainer.calibrate(df, pretrained_model_path, epochs=50) 
+    trainer = InversePINN_CalibratorTrainer(sensor_type=sensor_type)
+    best_k, best_c = trainer.calibrate(df, pretrained_path, epochs=50)
     
     # 3. 화면(프론트엔드)으로 추천값 리턴
     return {
@@ -187,39 +156,18 @@ async def auto_tune_sensor(sensor_id: str, sensor_type: str = "piezo", days: int
 @app.get("/models")
 async def get_all_models(sensor_type: str = None, db: Session = Depends(get_db)):
     """등록된 모든 모델 목록을 가져옵니다."""
-    query = db.query(AiModel).filter(AiModel.is_deleted == False).order_by(AiModel.created_at.desc())
-    if sensor_type:
-        query = query.filter(AiModel.sensor_type == sensor_type)
-    return query.all()
+    models = ModelService.get_all_models(db, sensor_type)
+    return models
 
 @app.delete("/models/{model_id}")
 async def delete_model(model_id: int, db: Session = Depends(get_db)):
     """특정 모델의 DB 기록과 실제 파일을 삭제합니다."""
-    model_record = db.query(AiModel).filter(
-        AiModel.id == model_id,
-        AiModel.is_deleted == False
-    ).first()
-    
-    if not model_record:
+    success = ModelService.soft_delete_model(db, model_id)
+    if not success:
         raise HTTPException(status_code=404, detail="모델을 찾을 수 없거나 이미 삭제되었습니다.")
-    print(model_record.id, "|" , model_record.is_deleted)
-    try:
-        # 논리 삭제 실행
-        model_record.is_deleted = True
-        model_record.deleted_at = datetime.datetime.now()
-        model_record.status = "DELETED" 
-        
-        db.commit()
-        print(f"--- [SOFT DELETE] 모델 {model_id} 처리 완료 (is_deleted=True) ---")
-        return {"message": "모델이 안전하게 삭제(휴지통 이동)되었습니다."}
-
-    except Exception as e:
-        db.rollback()
-        print(f"DELETE ERROR 상세내용: {str(e)}")
-        raise HTTPException(status_code=500, detail="삭제 처리 중 서버 오류 발생")
+    return {"message": "모델이 안전하게 삭제되었습니다."}
 
 @app.get("/status")
 async def get_status(db: Session = Depends(get_db)):
-    # 시스템 상태 체크용 (최근 동작 중인 모델이 있는지 반환)
-    is_training = db.query(AiModel).filter(AiModel.status == "TRAINING").first() is not None
-    return {"status": "training" if is_training else "ready"}
+    # 시스템 상태 체크용 
+    return {"status": "ai ready"}
