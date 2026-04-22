@@ -5,7 +5,7 @@ import torch.nn.functional as F
 import numpy as np
 import os
 import json
-
+import math
 # 모델들 임포트
 from architectures.autoencoder import SensorAutoEncoder 
 from architectures.cnnlstmautoencoder import CNNLSTMAutoEncoder
@@ -21,7 +21,7 @@ def run_unsupervised_inference(sensor_type: str, file_path: str, model_type: str
     if not os.path.exists(file_path):
         raise FileNotFoundError(f"모델 파일을 찾을 수 없습니다: {file_path}")
     
-    # 🌟 1. 매핑 파일 로드 (학습 당시의 max_val 가져오기)
+    #  1. 매핑 파일 로드 (학습 당시의 max_val 가져오기)
     mapping_path = file_path.replace(".pt", "_mapping.json")
     train_max_val = 1.0
     if os.path.exists(mapping_path):
@@ -29,14 +29,14 @@ def run_unsupervised_inference(sensor_type: str, file_path: str, model_type: str
             mapping_data = json.load(f)
             train_max_val = mapping_data.get("max_val", 1.0)
 
-    # 🌟 2. 센서 타입에 따른 설정
+    #  2. 센서 타입에 따른 설정
     is_adxl = sensor_type.lower() == "adxl"
     features = 3 if is_adxl else 1
     
     # MLP(SensorAutoEncoder)는 전체 데이터 개수가 입력 사이즈가 됨
     actual_input_count = len(input_data) 
     
-    # 🌟 3. 모델 초기화 (features와 seq_len을 정확히 전달)
+    #  3. 모델 초기화 (features와 seq_len을 정확히 전달)
     if model_type.lower() == "autoencoder":
         model = SensorAutoEncoder(input_size=actual_input_count)
     elif model_type.lower() == "cnnlstmautoencoder":
@@ -50,11 +50,11 @@ def run_unsupervised_inference(sensor_type: str, file_path: str, model_type: str
     model.load_state_dict(torch.load(file_path, weights_only=True))
     model.eval() 
 
-    # 🌟 4. 데이터 전처리
+    #  4. 데이터 전처리
     input_arr = np.array(input_data, dtype=np.float32)
     input_normalized = input_arr / (train_max_val if train_max_val != 0 else 1.0)
 
-    # 🌟 5. 모델별 입력 차원 맞추기 (Reshape)
+    #  5. 모델별 입력 차원 맞추기 (Reshape)
     if model_type.lower() == "autoencoder":
         # MLP: [1, 128] 또는 [1, 384]
         tensor_x = torch.tensor(input_normalized).unsqueeze(0)
@@ -70,7 +70,7 @@ def run_unsupervised_inference(sensor_type: str, file_path: str, model_type: str
     with torch.no_grad():
         output = model(tensor_x)
 
-    # 🌟 6. 오차 계산 및 시각화 데이터 준비
+    #  6. 오차 계산 및 시각화 데이터 준비
     mse = nn.MSELoss()(output, tensor_x).item()
 
     # 차트 출력을 위해 데이터를 1차원 리스트로 다시 평탄화
@@ -114,7 +114,7 @@ def run_unsupervised_inference(sensor_type: str, file_path: str, model_type: str
     }
 
 # =====================================================================
-# 🌟 2. 지도 학습용 추론 엔진 (Classifier)
+#  2. 지도 학습용 추론 엔진 (Classifier)
 # =====================================================================
 def run_supervised_inference(sensor_type:str, file_path: str, model_type: str, input_data: list):
     if not os.path.exists(file_path):
@@ -178,7 +178,7 @@ def run_supervised_inference(sensor_type:str, file_path: str, model_type: str, i
     if predicted_label.lower() != "normal":
         severity = "CRITICAL" if best_confidence > 0.8 else "WARNING"
 
-    # 🌟 [수정] 프론트엔드와 키 이름을 정확히 맞춥니다.
+    #  [수정] 프론트엔드와 키 이름을 정확히 맞춥니다.
     return {
         "learning_type": "supervised",
         "prediction": predicted_label,
@@ -191,7 +191,7 @@ def run_supervised_inference(sensor_type:str, file_path: str, model_type: str, i
     }
 
 # =====================================================================
-# 🌟 3. PINN 비지도 학습 추론
+#  3. PINN 비지도 학습 추론
 # =====================================================================
 def run_pinn_inference(sensor_type: str, file_path: str, input_data: list, sensor_meta: dict = None):
     if not os.path.exists(file_path):
@@ -237,7 +237,7 @@ def run_pinn_inference(sensor_type: str, file_path: str, input_data: list, senso
     # 5. 오차 계산 (데이터 복원 오차)
     mse = nn.MSELoss()(output, tensor_x).item()
 
-    # 🌟 6. 물리 법칙 오차(Physics Error) 계산
+    #  6. 물리 법칙 오차(Physics Error) 계산
     # sensor_meta가 넘어왔다면 해당 센서의 진짜 물리값을, 없으면 기본값을 사용합니다.
     sampling_rate = sensor_meta.get("sampling_rate", 1000) if sensor_meta else 1000
     norm_dt = 1.0
@@ -257,7 +257,7 @@ def run_pinn_inference(sensor_type: str, file_path: str, input_data: list, senso
     original_signal = input_arr.flatten().tolist()
     pointwise_error = np.abs(np.array(original_signal) - np.array(reconstructed_signal)).tolist()
     
-    # 🌟 수정: physics_loss(float) 대신 physics_error_tensor(Tensor)를 사용
+    #  수정: physics_loss(float) 대신 physics_error_tensor(Tensor)를 사용
     # 중앙 차분법으로 인해 길이가 126이므로, 앞뒤에 0을 채워 128로 맞춤
     physics_residual_arr = physics_error_tensor.squeeze().cpu().numpy().flatten().tolist()
     padded_physics_residual = [0.0] + physics_residual_arr + [0.0]
@@ -265,20 +265,24 @@ def run_pinn_inference(sensor_type: str, file_path: str, input_data: list, senso
     # 1. 평균 손실 (기존 유지 - 전체적인 흐름 파악용)
     physics_loss_mean = torch.mean(physics_error_tensor).item()
     
-    # 2. 최대 손실 (스파이크 감지용 🌟)
+    # 2. 최대 손실 (스파이크 감지용 )
     physics_loss_max = torch.max(physics_error_tensor).item()
 
-    physics_loss_std = torch.std(physics_error_tensor).item() # 🌟 잔차의 불규칙성
+    physics_loss_std = torch.std(physics_error_tensor).item() #  잔차의 불규칙성
 
-    # 🌟 8. 임계치 및 상태 판독 로직 수정
+    #  8. 임계치 및 상태 판독 로직 수정
     THRESHOLD_MSE = 0.05
     THRESHOLD_PHYS_MEAN = 0.15 # 정상 노이즈를 고려해 약간 상향
-    THRESHOLD_PHYS_MAX = 0.30  # 튀는 값(스파이크)을 잡기 위한 임계치
+    THRESHOLD_PHYS_MAX = sensor_meta.get("threshold_max", 2.0) if sensor_meta else 2.0 # 튀는 값(스파이크)을 잡기 위한 임계치
     
     baseScore = 100 - (physics_loss_mean * 100); 
     excess = max(0.0, float(physics_loss_max - THRESHOLD_PHYS_MAX))
-    penalty = (excess ** 2) * 200
-    integrity = max(0.0, float(baseScore - penalty))
+    # 수정: 제곱 대신 로그 스케일 적용 
+    # (excess가 16이면 log(17) ≒ 2.83. 곱하기 20을 하면 약 56점 감점)
+    penalty = math.log1p(excess) * 20 
+
+    # 🌟 수정: 아무리 박살 나도 최소 3점은 보장 (너무 0이면 센서가 꺼진 것과 혼동될 수 있음)
+    integrity = max(3.0, float(baseScore - penalty))
 
     # 평균이 높거나, 단 하나라도 크게 튀면 이상으로 간주
     is_anomaly = (mse > THRESHOLD_MSE) or \

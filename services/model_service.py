@@ -2,7 +2,7 @@
 import datetime
 from sqlalchemy.orm import Session
 from models import AiModel
-
+from typing import List
 
 class ModelService:
     @staticmethod
@@ -33,11 +33,15 @@ class ModelService:
         ).first()
 
     @staticmethod
-    def get_all_models(db: Session, sensor_type: str) -> AiModel:
-        return db.query(AiModel).filter(
-            AiModel.is_deleted == False,
-            AiModel.sensor_type == sensor_type              
-        ).order_by(AiModel.created_at.desc())
+    def get_all_models(db: Session, sensor_type: str = None) -> List[AiModel]:
+        # 1. 기본 쿼리: 삭제되지 않은 모델만
+        query = db.query(AiModel).filter(AiModel.is_deleted == False)
+        
+        # 2. 동적 필터: sensor_type이 파라미터로 넘어왔을 때만 조건 추가
+        if sensor_type:
+            query = query.filter(AiModel.sensor_type == sensor_type)
+            
+        return query.order_by(AiModel.created_at.desc()).all()
     
     @staticmethod
     def get_latest_pinn_model(db: Session, sensor_type: str) -> AiModel:

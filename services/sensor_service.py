@@ -2,6 +2,7 @@
 import datetime
 from sqlalchemy.orm import Session
 from sensors import Sensor
+from sqlalchemy.sql import func
 
 class SensorService:
     @staticmethod
@@ -27,3 +28,15 @@ class SensorService:
                 "sampling_rate": s.sampling_rate or 1000
             }
         return meta_map
+    
+    @staticmethod
+    def update_recommended_params(db: Session, sensor_id: str, rec_k: float, rec_c: float, rec_thresh: float):
+        sensor = db.query(Sensor).filter(Sensor.id == sensor_id).first()
+        if sensor:
+            sensor.recommended_k = rec_k
+            sensor.recommended_c = rec_c
+            sensor.recommended_threshold = rec_thresh # 🌟 추가
+            sensor.last_calibrated_at = func.now()
+            db.commit()
+            return True
+        return False

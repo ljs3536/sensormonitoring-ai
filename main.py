@@ -16,7 +16,8 @@ from sensors import Sensor
 # 스케줄러 추가
 from scheduler import scheduler
 from architectures.calibration_pinn import InversePINN_CalibratorTrainer
-from services.model_service import ModelService, SensorService
+from services.model_service import ModelService
+from services.sensor_service import SensorService
 
 app = FastAPI()
 influx_store = AIStore() # DB 클라이언트 인스턴스 생성
@@ -143,14 +144,16 @@ async def auto_tune_sensor(sensor_id: str, sensor_type: str = "piezo", days: int
     pretrained_path = latest_model.file_path if latest_model else None
 
     trainer = InversePINN_CalibratorTrainer(sensor_type=sensor_type)
-    best_k, best_c = trainer.calibrate(df, pretrained_path, epochs=50)
+    best_k, best_c, best_thresh = trainer.calibrate(df, pretrained_path)
     
-    # 3. 화면(프론트엔드)으로 추천값 리턴
+    SensorService.update_recommended_params(db, sensor_id, best_k, best_c, best_thresh)
+    
     return {
         "status": "success",
         "suggested_k": best_k,
         "suggested_c": best_c,
-        "message": f"AI가 데이터 기반 최적의 파라미터를 찾았습니다. (k: {best_k}, c: {best_c})"
+        "suggested_threshold": best_thresh,
+        "message": "AI 최적화가 완료되어 추천 값이 센서 정보에 저장되었습니다."
     }
     
 @app.get("/models")

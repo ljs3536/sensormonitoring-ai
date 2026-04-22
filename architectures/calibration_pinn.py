@@ -81,7 +81,7 @@ class InversePINN_CalibratorTrainer:
         residual = (1.0 * a) + (c * v) + (k * x_inner)
         return torch.mean(residual ** 2)
 
-    def calibrate(self, df, pretrained_model_path: str = None, epochs=100, batch_size=32):
+    def calibrate(self, df, pretrained_model_path: str = None, epochs=50, batch_size=32):
         print("[Auto-Calibration] 물리 파라미터 최적화 시작...")
         
         # 1. 데이터 전처리 (기존 범용 모델 학습과 완벽히 동일하게 영점 조절)
@@ -116,7 +116,8 @@ class InversePINN_CalibratorTrainer:
                     param.requires_grad = False
             
             optimizer = optim.Adam([
-                {'params': [self.model.raw_k, self.model.raw_c], 'lr': 0.05} # 빠른 수렴을 위해 높은 LR
+                {'params': [self.model.raw_k], 'lr': 0.05},
+                {'params': [self.model.raw_c], 'lr': 0.2}
             ])
             use_warmup = False
             
@@ -129,7 +130,8 @@ class InversePINN_CalibratorTrainer:
                 {'params': self.model.lstm_enc.parameters()},
                 {'params': self.model.lstm_dec.parameters()},
                 {'params': self.model.deconv1.parameters()},
-                {'params': [self.model.raw_k, self.model.raw_c], 'lr': 0.01} 
+                {'params': [self.model.raw_k], 'lr': 0.05},
+                {'params': [self.model.raw_c], 'lr': 0.2}
             ], lr=0.001)
             use_warmup = True
             
@@ -172,6 +174,42 @@ class InversePINN_CalibratorTrainer:
                 print(f"Epoch {epoch+1}/{epochs} | K: {current_k.item():.4f} | C: {current_c.item():.4f} | Loss: {total_loss/len(dataloader):.6f}")
 
         final_k, final_c = self.model.get_physics_params()
-        print(f"[Auto-Calibration 완료] 추천 값 -> k: {final_k.item():.4f}, c: {final_c.item():.4f}")
+        print(f"[Auto-Calibration 완료] 추천 물리 값 -> k: {final_k.item():.4f}, c: {final_c.item():.4f}")
         
-        return round(final_k.item(), 4), round(final_c.item(), 4)
+        # =========================================================
+        # 🌟 5. 정상 데이터 기반 Auto-Threshold (임계치) 자동 추출
+        # =========================================================
+        print("[Auto-Threshold] 정상 데이터의 기준 잔차(Baseline) 측정 중...")
+        self.model.eval() # 평가 모드 전환
+        max_physics_losses = []
+        
+        with torch.no_grad():
+            for batch_x, in dataloader:
+                batch_x = batch_x.to(self.device).float()
+                batch_pred = self.model(batch_x)
+                
+                # 예측 모드(predict_engine.py)와 완벽히 동일한 방식으로 잔차 계산
+                norm_dt = 1.0
+                v = (batch_pred[:, 2:, :] - batch_pred[:, :-2, :]) / (2 * norm_dt)
+                a = (batch_pred[:, 2:, :] - 2 * batch_pred[:, 1:-1, :] + batch_pred[:, :-2, :]) / (norm_dt ** 2)
+                x_inner = batch_pred[:, 1:-1, :]
+                
+                # 최종 k, c를 적용한 물리 잔차 (batch_size, seq_len-2, features)
+                residual = (1.0 * a) + (final_c.item() * v) + (final_k.item() * x_inner)
+                physics_error_tensor = residual ** 2
+                
+                # 배치 내에서 가장 컸던 Max Loss 추출
+                batch_max_loss = torch.max(physics_error_tensor).item()
+                max_physics_losses.append(batch_max_loss)
+
+        # 전체 정상 데이터 중에서 가장 높게 튀었던 잔차값
+        baseline_max_loss = max(max_physics_losses)
+        
+        #  여유율(Margin) 부여: 정상 최고치의 2.0배 ~ 3.0배를 임계치로 설정
+        # 너무 타이트하면 정상 노이즈에도 알람이 울리므로 (False Alarm 방지)
+        recommended_threshold_max = baseline_max_loss * 2.5 
+
+        print(f" [Auto-Threshold 완료] 기준 Max: {baseline_max_loss:.5f} -> 추천 임계치: {recommended_threshold_max:.5f}")
+        
+        # 기존 리턴 값에 threshold 추가
+        return round(final_k.item(), 4), round(final_c.item(), 4), round(recommended_threshold_max, 5)

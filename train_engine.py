@@ -11,7 +11,7 @@ from architectures.cnnlstmautoencoder import CNNLSTMAutoEncoderTrainer
 from architectures.cnnlstm_classifier import CNNLSTMClassifierTrainer
 from architectures.spectrogram_cnn import SpectrogramCNNTrainer
 from architectures.pinn_cnnlstmautoencoder import PINN_CNNLSTMAutoEncoderTrainer
-from services.model_service import SensorService
+from services.sensor_service import SensorService
 influx_store = AIStore()
 
 def run_unsupervised_training(sensor_type: str, model_type: str, days: int, sensor_id: str = None):
