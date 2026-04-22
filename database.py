@@ -69,5 +69,37 @@ class AIStore:
             
         return df
 
+    # ---------------------------------------------------------
+    # 3. 캘리브레이션용 - '정상(normal)' 라벨이 붙은 데이터만 뽑기
+    # ---------------------------------------------------------
+    def fetch_normal_data_from_influx(self, sensor_type: str, days=7, sensor_id: str = None):
+        query = f'''
+            from(bucket: "{settings.influxdb_bucket}")
+            |> range(start: -{days}d)
+            |> filter(fn: (r) => r["_measurement"] == "{sensor_type}_sensor")
+        '''
+        
+        if sensor_id:
+            query += f'\n            |> filter(fn: (r) => r["sensor_id"] == "{sensor_id}")'
+            
+        # 🌟 핵심: label이 "normal"인 데이터만 필터링합니다.
+        query += '''
+            |> filter(fn: (r) => r["label"] == "normal")
+            |> filter(fn: (r) => exists r["_value"]) 
+            |> pivot(rowKey:["_time"], columnKey: ["_field"], valueColumn: "_value")
+        '''
+        
+        df = self.query_api.query_data_frame(query)
+        
+        if isinstance(df, list): 
+            if len(df) == 0: return pd.DataFrame()
+            df = pd.concat(df, ignore_index=True)
+            
+        # 노이즈나 결측치 제거 방어 코드
+        if not df.empty:
+            df = df.dropna()
+            
+        return df
+
     def close(self):
         self.client.close()

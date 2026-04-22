@@ -2,7 +2,7 @@
 # 서비스 엔트리 포인트 (FastAPI 라우팅)
 from fastapi import FastAPI, BackgroundTasks, Depends, HTTPException, Body
 from sqlalchemy.orm import Session
-from database import AIStore 
+from database import AIStore
 import numpy as np
 import os
 import datetime
@@ -15,6 +15,7 @@ from models import AiModel
 from sensors import Sensor
 # 스케줄러 추가
 from scheduler import scheduler
+from architectures.calibration_pinn import InversePINN_CalibratorTrainer
 
 app = FastAPI()
 influx_store = AIStore() # DB 클라이언트 인스턴스 생성
@@ -132,8 +133,56 @@ async def predict(sensor_type: str, model_id: int, sensor_id: str = None, data: 
         
         return result_dict
     except Exception as e:
-        print(f"❌ [PREDICT ERROR]: {str(e)}") 
+        print(f" [PREDICT ERROR]: {str(e)}") 
         return {"error": str(e)}
+
+# API 엔드포인트 예시 스케치
+@app.post("/auto_tune")
+async def auto_tune_sensor(sensor_id: str, sensor_type: str = "piezo", days: int = 7):
+    # 1. InfluxDB에서 해당 센서의 최근 정상 데이터(df)를 가져온다.
+    df = influx_store.fetch_normal_data_from_influx(sensor_type=sensor_type, days=days, sensor_id=sensor_id)
+    
+    if df.empty:
+        return {"status": "error", "message": "정상(normal) 데이터가 충분하지 않아 최적화를 진행할 수 없습니다."}
+    
+    # 2. 캘리브레이터 실행 (sensor_type을 넘겨주어 piezo/adxl 구분)
+    trainer = InversePINN_CalibratorTrainer(sensor_type=sensor_type)
+    
+     # =========================================================
+    #  3. DB에서 최신 PINN 범용 모델 경로 자동 조회
+    # =========================================================
+    db_session = SessionLocal()
+    pretrained_model_path = None
+    try:
+        latest_model = (
+            db_session.query(AiModel)
+            .filter(
+                AiModel.sensor_type == sensor_type,
+                AiModel.model_type.ilike("pinn_cnnlstmautoencoder"), # 대소문자 무시 검색
+                AiModel.status == "READY", # 학습이 완료된 정상 모델만
+                AiModel.is_deleted == False # 삭제되지 않은 모델만
+            )
+            .order_by(AiModel.created_at.desc())
+            .first() # one()은 결과가 0개일 때 에러가 나므로 first() 사용
+        )
+        
+        if latest_model and latest_model.file_path:
+            pretrained_model_path = latest_model.file_path
+    except Exception as e:
+        print(f"[DB Error] 모델 조회 중 오류 발생: {e}")
+    finally:
+        db_session.close()
+
+    # batch_size나 epoch는 데이터량에 따라 조절 가능
+    best_k, best_c = trainer.calibrate(df, pretrained_model_path, epochs=50) 
+    
+    # 3. 화면(프론트엔드)으로 추천값 리턴
+    return {
+        "status": "success",
+        "suggested_k": best_k,
+        "suggested_c": best_c,
+        "message": f"AI가 데이터 기반 최적의 파라미터를 찾았습니다. (k: {best_k}, c: {best_c})"
+    }
     
 @app.get("/models")
 async def get_all_models(sensor_type: str = None, db: Session = Depends(get_db)):
@@ -155,7 +204,7 @@ async def delete_model(model_id: int, db: Session = Depends(get_db)):
         raise HTTPException(status_code=404, detail="모델을 찾을 수 없거나 이미 삭제되었습니다.")
     print(model_record.id, "|" , model_record.is_deleted)
     try:
-        # 🌟 논리 삭제 실행
+        # 논리 삭제 실행
         model_record.is_deleted = True
         model_record.deleted_at = datetime.datetime.now()
         model_record.status = "DELETED" 
@@ -166,7 +215,7 @@ async def delete_model(model_id: int, db: Session = Depends(get_db)):
 
     except Exception as e:
         db.rollback()
-        print(f"❌ DELETE ERROR 상세내용: {str(e)}")
+        print(f"DELETE ERROR 상세내용: {str(e)}")
         raise HTTPException(status_code=500, detail="삭제 처리 중 서버 오류 발생")
 
 @app.get("/status")
