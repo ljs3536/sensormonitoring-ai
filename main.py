@@ -23,7 +23,9 @@ app = FastAPI()
 influx_store = AIStore() # DB 클라이언트 인스턴스 생성
 
 # 모델 저장 경로 설정
-MODEL_DIR = "models"
+# 환경 변수에서 경로를 가져오고, 없으면 기본값으로 컨테이너 내부의 /app/models를 사용합니다.
+MODEL_DIR = os.getenv("MODEL_DIR", "/app/models")
+
 os.makedirs(MODEL_DIR, exist_ok=True)
 
 @app.on_event("startup")
