@@ -9,6 +9,7 @@ import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import DataLoader, TensorDataset
 from scipy import stats
+import shutil
 
 # 1. 지도 학습용 CNN-LSTM 분류기 모델
 class CNNLSTMClassifier(nn.Module):
@@ -134,25 +135,82 @@ class CNNLSTMClassifierTrainer:
             if (epoch + 1) % 5 == 0:
                 print(f"Epoch [{epoch+1}/{epochs}], Loss: {total_loss/len(dataloader):.6f}")
 
-        # 🌟 저장 로직 부분 수정
-        model_dir = "models"
-        os.makedirs(model_dir, exist_ok=True)
-        timestamp = int(time.time())
-        file_name = f"{self.sensor_type}_cnnlstm_classifier_{timestamp}.pt"
-        file_path = os.path.join(model_dir, file_name)
+        # # 🌟 저장 로직 부분 수정
+        # model_dir = "models"
+        # os.makedirs(model_dir, exist_ok=True)
+        # timestamp = int(time.time())
+        # file_name = f"{self.sensor_type}_cnnlstm_classifier_{timestamp}.pt"
+        # file_path = os.path.join(model_dir, file_name)
         
-        torch.save(model.state_dict(), file_path)
+        # torch.save(model.state_dict(), file_path)
         
-        # 🌟 매핑 정보 저장 시 model_type을 명시합니다.
-        mapping_path = file_path.replace(".pt", "_mapping.json")
-        with open(mapping_path, 'w') as f:
-            index_to_label = {idx: label for label, idx in label_to_index.items()}
-            save_data = {
-                "index_to_label": index_to_label,
-                "max_val": float(max_val),
-                "model_type": "cnnlstm_classifier" # 👈 추론 엔진의 자동 분기를 위해 추가
-            }
-            json.dump(save_data, f)
+        # # 🌟 매핑 정보 저장 시 model_type을 명시합니다.
+        # mapping_path = file_path.replace(".pt", "_mapping.json")
+        # with open(mapping_path, 'w') as f:
+        #     index_to_label = {idx: label for label, idx in label_to_index.items()}
+        #     save_data = {
+        #         "index_to_label": index_to_label,
+        #         "max_val": float(max_val),
+        #         "model_type": "cnnlstm_classifier" # 👈 추론 엔진의 자동 분기를 위해 추가
+        #     }
+        #     json.dump(save_data, f)
 
-        print(f"--- [TRAIN] 모델 생성 완료! 저장 위치: {file_path} ---")
-        return file_path
+        # print(f"--- [TRAIN] 모델 생성 완료! 저장 위치: {file_path} ---")
+        # return file_path
+        # ========================================================
+        # 🌟 로컬 vs K8s 환경을 스스로 판단하는 저장 로직
+        # ========================================================
+        
+        # 1. 내가 지금 K8s 안에 있는지 확인 (K8s는 이 환경변수를 무조건 가지고 있음)
+        IS_K8S_ENV = "KUBERNETES_SERVICE_HOST" in os.environ
+        
+        # 2. 경로 설정 (환경 변수가 없으면 로컬 개발용 상대 경로 './models' 사용)
+        final_dir = os.getenv("MODEL_DIR", "./models")
+        temp_dir = os.getenv("TEMP_MODEL_DIR", "./temp_models")
+        
+        os.makedirs(final_dir, exist_ok=True)
+        
+        timestamp = int(time.time())
+        base_filename = f"{self.sensor_type}_cnnlstm_classifier_{timestamp}"
+        
+        final_model_path = os.path.join(final_dir, f"{base_filename}.pt")
+        final_mapping_path = os.path.join(final_dir, f"{base_filename}_mapping.json")
+
+        index_to_label = {idx: label for label, idx in label_to_index.items()}
+                 
+        # 메타데이터 준비
+        meta_data = {
+            "index_to_label": index_to_label, 
+            "max_val": max_val.tolist(),
+            "model_type": "cnnlstm_classifier"
+        }
+
+        if IS_K8S_ENV:
+            # ---------------------------------------------------
+            # [K8s 환경] 하이브리드 저장 (RAM -> PVC로 복사)
+            # ---------------------------------------------------
+            os.makedirs(temp_dir, exist_ok=True)
+            
+            temp_model_path = os.path.join(temp_dir, f"{base_filename}.pt")
+            temp_mapping_path = os.path.join(temp_dir, f"{base_filename}_mapping.json")
+            
+            # 1. 빠른 RAM에 먼저 쓰기
+            torch.save(self.model.state_dict(), temp_model_path)
+            with open(temp_mapping_path, 'w') as f:
+                json.dump(meta_data, f)
+                
+            # 2. 느린 영구 디스크로 한 번에 복사
+            shutil.copy(temp_model_path, final_model_path)
+            shutil.copy(temp_mapping_path, final_mapping_path)
+            print(f"--- [K8s] RAM -> PVC 하이브리드 저장 완료 ---")
+            
+        else:
+            # ---------------------------------------------------
+            # [Local 환경] 다이렉트 저장 (바로 SSD에 쓰기)
+            # ---------------------------------------------------
+            torch.save(self.model.state_dict(), final_model_path)
+            with open(final_mapping_path, 'w') as f:
+                json.dump(meta_data, f)
+            print(f"--- [Local] 다이렉트 로컬 저장 완료 ---")
+
+        return final_model_path
