@@ -18,9 +18,11 @@ from scheduler import scheduler
 from architectures.calibration_pinn import InversePINN_CalibratorTrainer
 from services.model_service import ModelService
 from services.sensor_service import SensorService
-
+from routers import proto_router
 app = FastAPI()
 influx_store = AIStore() # DB 클라이언트 인스턴스 생성
+
+app.include_router(proto_router.router)
 
 # 모델 저장 경로 설정
 # 환경 변수에서 경로를 가져오고, 없으면 기본값으로 컨테이너 내부의 /app/models를 사용합니다.
