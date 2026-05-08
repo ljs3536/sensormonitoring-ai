@@ -8,14 +8,14 @@ import datetime
 # 프로젝트 구조에 맞게 Import 경로를 수정해 주세요.
 from database_rdb import get_db, SensorData, SessionLocal
 from architectures.prototypical import PrototypicalLeakDetector # 🌟 추가됨!
-
+from architectures.fewshot_prototypical import FewShotPrototypicalDetector
 router = APIRouter(prefix="/ai", tags=["Proto"])
 
 class LeakPredictRequest(BaseModel):
     features: List[List[float]] 
 
 @router.post("/proto/train")
-async def train_leak_model(sensor_id: str, days: int = 7, background_tasks: BackgroundTasks = None):
+async def train_leak_model(sensor_id: str, model_type: str, days: int = 7, background_tasks: BackgroundTasks = None):
     def task(s_id, train_days):
         db_session = SessionLocal() 
         try:
@@ -37,9 +37,12 @@ async def train_leak_model(sensor_id: str, days: int = 7, background_tasks: Back
             X_train, y_train = np.array(X), np.array(y)
             
             # 🌟 2. 아키텍처 모델 호출 및 학습
-            detector = PrototypicalLeakDetector()
-            detector.fit(X_train, y_train, epochs=50) # 50번 반복 학습
-            
+            if model_type == "all":
+                detector = PrototypicalLeakDetector()
+                detector.fit(X_train, y_train, epochs=50) # 50번 반복 학습
+            elif model_type == "few":
+                detector = FewShotPrototypicalDetector()
+                detector.fit(X_train, y_train, epochs=50) 
             # 🌟 3. 학습 완료된 모델 저장
             saved_path = detector.save(s_id)
             print(f"✅ [AI] {s_id} 누출 모델 학습 및 저장 성공! ({saved_path})")
@@ -54,16 +57,19 @@ async def train_leak_model(sensor_id: str, days: int = 7, background_tasks: Back
 
 
 @router.post("/proto/predict")
-async def predict_leak_model(sensor_id: str, payload: LeakPredictRequest):
+async def predict_leak_model(sensor_id: str, model_type: str, payload: LeakPredictRequest):
     print(sensor_id)
     try:
         # 1. 프론트엔드/백엔드에서 받은 배열 (예: N개 데이터 x 128차원)
         X_test = np.array(payload.features) 
         
         # 🌟 2. 아키텍처 모델 로드 및 예측 진행
-        detector = PrototypicalLeakDetector()
-        detector.load(sensor_id) # 저장된 모델 파일 불러오기
-        
+        if model_type == "all":
+            detector = PrototypicalLeakDetector()
+            detector.load(sensor_id) # 저장된 모델 파일 불러오기
+        elif model_type == "few":
+            detector = FewShotPrototypicalDetector()
+            detector.load(sensor_id)
         # 실제 모델 추론 실행!
         results = detector.predict(X_test)
 
