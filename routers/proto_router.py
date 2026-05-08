@@ -24,7 +24,8 @@ async def train_leak_model(sensor_id: str, days: int = 7, background_tasks: Back
             # 1. 데이터 조회 및 파싱 (기존 코드와 동일)
             time_threshold = datetime.datetime.now() - datetime.timedelta(days=train_days)
             records = db_session.query(SensorData).filter(
-                SensorData.MAC_ADDR == s_id, SensorData.REG_DT >= time_threshold
+                SensorData.MAC_ADDR == s_id, SensorData.REG_DT >= time_threshold,
+                SensorData.LEAK_YN == "N"
             ).all()
 
             X, y = [], []
