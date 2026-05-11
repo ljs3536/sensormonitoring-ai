@@ -2,8 +2,10 @@ import os
 import datetime
 from sqlalchemy.orm import Session
 from apscheduler.schedulers.background import BackgroundScheduler
-from database_rdb import SessionLocal
+from database_rdb import SessionLocal, SensorData, ModelRegistry
 from models import AiModel
+from sqlalchemy import func
+from routers.proto_router import train_proto_model_internal
 
 def hard_delete_old_models():
     """
@@ -51,8 +53,48 @@ def hard_delete_old_models():
     finally:
         db.close()
 
+
+def weekly_model_retrain_job():
+    print(f"⏰ [Scheduler] 주간 자동 재학습 시작: {datetime.datetime.now()}")
+    db = SessionLocal()
+    try:
+        # 1. 시스템에 등록된 모든 센서(MAC_ADDR) 목록 가져오기
+        sensors = db.query(SensorData.MAC_ADDR).distinct().all()
+        sensor_list = [s[0] for s in sensors]
+
+        for mac_addr in sensor_list:
+            print(f"🔄 [Scheduler] 센서 {mac_addr} 재학습 시도...")
+            
+            # 2. 각 센서에 대해 All-Shot과 Few-Shot 모델 생성 (Candidate 상태로)
+            # 이 함수는 이전에 만든 train_leak_model의 내부 로직을 별도 함수로 뺀 것입니다.
+            try:
+                # All-shot 학습
+                train_proto_model_internal(
+                    sensor_id=mac_addr, 
+                    model_type="all", 
+                    days=7, 
+                    auto_activate=False # 자동 생성은 검토를 위해 Candidate로!
+                )
+                
+                # Few-shot 학습
+                train_proto_model_internal(
+                    sensor_id=mac_addr, 
+                    model_type="few", 
+                    days=7, 
+                    auto_activate=False
+                )
+            except Exception as e:
+                print(f"❌ [Scheduler] {mac_addr} 학습 중 오류: {e}")
+
+    finally:
+        db.close()
+    print(f"✅ [Scheduler] 모든 센서 재학습 프로세스 완료")
+
 # 스케줄러 설정
 scheduler = BackgroundScheduler()
+
+# 매주 일요일 새벽 3시에 실행 (서비스 부하가 가장 적은 시간)
+scheduler.add_job(weekly_model_retrain_job, 'cron', day_of_week='sun', hour=3, minute=0)
 
 # 매일 새벽 3시에 실행하도록 예약
 scheduler.add_job(hard_delete_old_models, 'cron', hour=3, minute=0)
