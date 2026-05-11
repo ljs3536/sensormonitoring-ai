@@ -1,7 +1,7 @@
 from sqlalchemy import create_engine, Column, Integer, Float, String, Text, CHAR, TIMESTAMP, text, DateTime
 from sqlalchemy.orm import sessionmaker, declarative_base
 from config import settings
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 
 engine = create_engine(settings.mariadb_url)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
@@ -22,6 +22,8 @@ class ModelRegistry(Base):
     STATUS = Column(String(20), default="CANDIDATE")          # ACTIVE, INACTIVE, CANDIDATE
     REG_DT = Column(DateTime, default=datetime.now)           # 생성일시
 
+KST = timezone(timedelta(hours=9))
+
 # tb_sensor_data 테이블 모델 정의
 class SensorData(Base):
     __tablename__ = 'tb_sensor_data'
@@ -30,7 +32,7 @@ class SensorData(Base):
     BATTERY_RMIN = Column(String(50), nullable=False, default="100", comment='배터리잔량')
     SENSOR_DATA = Column(Text, nullable=False, comment='센서자료')
     LEAK_PRBBLT = Column(String(50), nullable=False, default="0", comment='누출확률')
-    REG_DT = Column(TIMESTAMP, server_default=text('CURRENT_TIMESTAMP'), comment='등록일시')
+    REG_DT = Column(TIMESTAMP, default=lambda: datetime.now(KST), comment='등록일시')
     LEAK_YN = Column(CHAR(1), default="N", comment='누출여부')
 
 # DB 세션을 가져오는 의존성 함수
