@@ -139,9 +139,10 @@ class FewShotPrototypicalDetector:
         }, path)
         return path
 
-    def load(self, sensor_id):
-        path = os.path.join(self.model_dir, f"fewshot_model_{sensor_id}.pt")
-        checkpoint = torch.load(path, map_location=self.device, weights_only=False)
+    def load(self, file_path):
+        if not os.path.exists(file_path):
+            raise FileNotFoundError(f"모델 파일을 찾을 수 없습니다: {file_path}")
+        checkpoint = torch.load(file_path, map_location=self.device, weights_only=False)
         
         self.input_dim = checkpoint.get('input_dim', 320) 
         self.model = CNNEncoder(self.input_dim, self.embed_dim).to(self.device)

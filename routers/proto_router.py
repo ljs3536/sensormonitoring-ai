@@ -13,6 +13,8 @@ router = APIRouter(prefix="/ai", tags=["Proto"])
 
 class LeakPredictRequest(BaseModel):
     features: List[List[float]] 
+    file_path: str
+    model_type: str
 
 @router.post("/proto/train")
 async def train_leak_model(sensor_id: str, model_type: str, days: int = 7, background_tasks: BackgroundTasks = None):
@@ -90,25 +92,23 @@ async def train_leak_model(sensor_id: str, model_type: str, days: int = 7, backg
 
 
 @router.post("/proto/predict")
-async def predict_leak_model(sensor_id: str, model_type: str, payload: LeakPredictRequest):
-    print(sensor_id)
+async def predict_leak_model(payload: LeakPredictRequest):
     try:
-        # 1. 프론트엔드/백엔드에서 받은 배열 (예: N개 데이터 x 128차원)
         X_test = np.array(payload.features) 
         
-        # 🌟 2. 아키텍처 모델 로드 및 예측 진행
-        if model_type == "all":
+        # 백엔드에서 넘겨준 model_type에 따라 아키텍처 선택
+        if payload.model_type == "all":
             detector = PrototypicalLeakDetector()
-            detector.load(sensor_id) # 저장된 모델 파일 불러오기
-        elif model_type == "few":
+        elif payload.model_type == "few":
             detector = FewShotPrototypicalDetector()
-            detector.load(sensor_id)
-        # 실제 모델 추론 실행!
-        results = detector.predict(X_test)
+        else:
+            raise ValueError("알 수 없는 모델 타입입니다.")
 
+        # 🌟 백엔드가 넘겨준 정확한 파일 경로로 모델 로드!
+        detector.load(payload.file_path) 
+        
+        results = detector.predict(X_test)
         return {"predictions": results}
 
-    except FileNotFoundError:
-        raise HTTPException(status_code=404, detail="모델이 학습되지 않았습니다. 먼저 모델을 갱신해주세요.")
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"예측 중 오류 발생: {str(e)}")
