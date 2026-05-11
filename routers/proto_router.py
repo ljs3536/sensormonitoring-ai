@@ -17,8 +17,8 @@ class LeakPredictRequest(BaseModel):
     model_type: str
 
 @router.post("/proto/train")
-async def train_leak_model(sensor_id: str, model_type: str, days: int = 7, background_tasks: BackgroundTasks = None):
-    def task(s_id, train_days):
+async def train_leak_model(sensor_id: str, model_type: str, days: int = 7, auto_activate: bool = True, background_tasks: BackgroundTasks = None):
+    def task(s_id, train_days, is_auto_activate):
         db_session = SessionLocal() 
         try:
             print(f"🚀 [AI] {s_id} 누출 모델 학습 시작...")
@@ -66,6 +66,16 @@ async def train_leak_model(sensor_id: str, model_type: str, days: int = 7, backg
             t_mean = detector.thresholds[0].get('mean', 0.0)
             t_std = detector.thresholds[0].get('std', 0.0)
 
+            # 🌟 [핵심 변경 사항] is_auto_activate 가 True면 즉시 ACTIVE로 설정
+            new_status = "ACTIVE" if is_auto_activate else "CANDIDATE"
+
+            # 만약 새 모델을 ACTIVE로 만들 거라면, 기존 ACTIVE 모델들을 INACTIVE로 강등시켜야 함!
+            if new_status == "ACTIVE":
+                db_session.query(ModelRegistry).filter(
+                    ModelRegistry.MAC_ADDR == s_id,
+                    ModelRegistry.STATUS == "ACTIVE"
+                ).update({"STATUS": "INACTIVE"})
+
             new_model_record = ModelRegistry(
                 MAC_ADDR=s_id,
                 MODEL_TYPE=model_type,
@@ -74,7 +84,7 @@ async def train_leak_model(sensor_id: str, model_type: str, days: int = 7, backg
                 TRAIN_SAMPLES=len(X_train),
                 THRESHOLD_MEAN=t_mean,
                 THRESHOLD_STD=t_std,
-                STATUS="CANDIDATE" # 👈 처음엔 무조건 대기 상태!
+                STATUS=new_status # 👈 처음엔 무조건 대기 상태!
             )
             
             db_session.add(new_model_record)
@@ -87,7 +97,7 @@ async def train_leak_model(sensor_id: str, model_type: str, days: int = 7, backg
         finally:
             db_session.close()
 
-    background_tasks.add_task(task, sensor_id, days)
+    background_tasks.add_task(task, sensor_id, days, auto_activate)
     return {"message": "누출 모델(Prototypical) 학습이 시작되었습니다."}
 
 
