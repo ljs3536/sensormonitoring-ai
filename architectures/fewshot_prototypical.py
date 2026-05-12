@@ -50,6 +50,20 @@ class FewShotPrototypicalDetector:
         self.prototypes = {}
         self.thresholds = {}
 
+    # 현재 중심점 가져오기 (단수형 -> 복수형으로 수정)
+    def get_center(self):
+        # self.prototypes 가 비어있는지 확인
+        if not hasattr(self, 'prototypes') or self.prototypes is None:
+            raise ValueError("모델 중심점(prototypes)이 초기화되지 않았습니다.")
+        
+        # 텐서 타입인 self.prototypes를 그대로 반환합니다.
+        # (만약 딕셔너리나 리스트 형태로 감싸져 있다면, 인덱싱 [0] 이 필요할 수도 있습니다)
+        return self.prototypes 
+
+    #  새로운 중심점 덮어씌우기
+    def set_center(self, new_center_tensor):
+        self.prototypes = new_center_tensor
+
     def fit(self, X, y, epochs=100, lr=0.001, seed=42):
         # 재현성을 위해 시드 고정
         random.seed(seed)
@@ -128,8 +142,11 @@ class FewShotPrototypicalDetector:
 
         return results
 
-    def save(self, sensor_id):
-        path = os.path.join(self.model_dir, f"fewshot_model_{sensor_id}.pt")
+    def save(self, file_name):
+        if not file_name.endswith('.pt'):
+            file_name += '.pt'
+            
+        path = os.path.join(self.model_dir, file_name)
         torch.save({
             'input_dim': self.input_dim, 
             'state_dict': self.model.state_dict(),
