@@ -20,11 +20,13 @@ class LeakPredictRequest(BaseModel):
     file_path: str
     model_type: str
 
+class TrainRequest(BaseModel):
+    memo: str = ""
 
 @router.post("/proto/train")
-async def train_leak_model(sensor_id: str, model_type: str, update_mode: str, days: int = 7, auto_activate: bool = True, background_tasks: BackgroundTasks = None):
+async def train_leak_model(sensor_id: str, model_type: str, update_mode: str, days: int = 7, auto_activate: bool = True, request_data: TrainRequest = Body(...), background_tasks: BackgroundTasks = None):
     
-    background_tasks.add_task(train_proto_model_internal, sensor_id, model_type,update_mode, days, auto_activate)
+    background_tasks.add_task(train_proto_model_internal, sensor_id, model_type,update_mode, days, auto_activate, request_data.memo)
     return {"message": "누출 모델(Prototypical) 학습이 시작되었습니다."}
 
 

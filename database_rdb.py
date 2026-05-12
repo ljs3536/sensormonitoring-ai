@@ -22,9 +22,12 @@ class ModelRegistry(Base):
     THRESHOLD_STD = Column(Float)
     STATUS = Column(String(20), default="CANDIDATE")
     
-    # 🌟 추가됨: 학습 시점의 상세 평가 지표 (JSON 형식)
+    # 학습 시점의 상세 평가 지표 (JSON 형식)
     # 예: {"accuracy": 0.98, "max_dist": 1.2, "dist_distribution": [...]}
     EVAL_METRICS = Column(JSON, nullable=True) 
+
+    # MEMO
+    MEMO = Column(Text, nullable=True)
     
     REG_DT = Column(DateTime, default=lambda: datetime.now(KST))
 

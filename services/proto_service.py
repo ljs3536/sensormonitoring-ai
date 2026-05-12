@@ -110,7 +110,7 @@ def _run_backtest(db, detector, sensor_id, model_id):
         print(f"백테스팅 완료 ({len(logs)}건)")
 
 # --- 전체 프로세스 조율 ---
-def train_proto_model_internal(sensor_id: str, model_type: str, update_mode: str, days: int, auto_activate: bool):
+def train_proto_model_internal(sensor_id: str, model_type: str, update_mode: str, days: int, auto_activate: bool, memo: str = None):
     db = SessionLocal() 
     try:
         # [Step 1] 데이터 준비
@@ -154,7 +154,8 @@ def train_proto_model_internal(sensor_id: str, model_type: str, update_mode: str
             MAC_ADDR=sensor_id, MODEL_TYPE=model_type, VERSION=max_v + 1,
             FILE_PATH=saved_path, STATUS=new_status, EVAL_METRICS=metrics,
             THRESHOLD_MEAN=metrics['threshold_mean'], THRESHOLD_STD=metrics['threshold_std'],
-            TRAIN_SAMPLES=metrics['train_samples']
+            TRAIN_SAMPLES=metrics['train_samples'],
+            MEMO=memo
         )
         db.add(new_model)
         db.commit()
