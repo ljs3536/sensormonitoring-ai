@@ -89,7 +89,7 @@ class FewShotPrototypicalDetector:
             loss.backward()
             optimizer.step()
 
-        # 🌟 핵심 차이점: 인수인계 코드 방식 적용 (5개 랜덤 추출)
+        #  핵심 차이점: 인수인계 코드 방식 적용 (5개 랜덤 추출)
         self.model.eval()
         with torch.no_grad():
             final_embeds = self.model(X_tensor)
@@ -102,15 +102,21 @@ class FewShotPrototypicalDetector:
             sampled_indices = random.sample(range(total_samples), actual_shots)
             sampled_embeds = final_embeds[sampled_indices]
             
-            # 🌟 5개 데이터의 평균만 내서 중심점(Prototype)으로 사용!
+            #  5개 데이터의 평균만 내서 중심점(Prototype)으로 사용!
             final_center = torch.mean(sampled_embeds, dim=0)
             self.prototypes[0] = final_center.cpu().numpy()
             
             # 임계값(Threshold)도 5개 데이터에 대해서만 계산
-            dists_np = torch.norm(sampled_embeds - final_center, dim=1).cpu().numpy()
+            dists_np = torch.norm(final_embeds - final_center, dim=1).cpu().numpy()
+        
+            calc_mean = float(np.mean(dists_np))
+            calc_std = float(np.std(dists_np))
+            min_std_ratio = calc_mean * 0.05 
+            final_std = max(calc_std, min_std_ratio, 0.0001)
+
             self.thresholds[0] = {
-                'mean': float(np.mean(dists_np)),
-                'std': float(np.std(dists_np)) if actual_shots > 1 else 1.0
+                'mean': calc_mean,
+                'std': final_std if actual_shots > 1 else 1.0
             }
 
     def predict(self, X):

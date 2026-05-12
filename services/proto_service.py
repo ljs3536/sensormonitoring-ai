@@ -51,8 +51,12 @@ def _do_ema_blending(detector, active_model_path, X_train, alpha=0.1):
     # (2) 범위 조정 (Threshold - Mean : 울타리의 크기)
     blended_mean = (1 - alpha) * old_t['mean'] + (alpha * new_t_mean)
     # (3) 텐션 조정 (Threshold - Std : 울타리의 유연함)
-    min_std = 0.0001 # 최소한의 유연성 확보
-    blended_std = max(min_std, (1 - alpha) * old_t['mean'] + (alpha * new_t_std))
+
+    # 일단 수학적으로 섞인 std를 계산합니다.
+    calc_blended_std = (1 - alpha) * old_t['std'] + (alpha * new_t_std)
+    # 절대적 하한선(0.0001)도 함께 두어 이중 안전장치를 합니다.
+    min_std_limit = max(blended_mean * 0.05, 0.0001)
+    blended_std = max(calc_blended_std, min_std_limit)
 
     # 4. 모델에 주입
     detector.set_center({0: blended_center})

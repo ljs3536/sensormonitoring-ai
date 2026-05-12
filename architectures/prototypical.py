@@ -105,9 +105,17 @@ class PrototypicalLeakDetector:
             self.prototypes[0] = final_center.cpu().numpy()
             
             dists_np = torch.norm(final_embeds - final_center, dim=1).cpu().numpy()
+        
+            calc_mean = float(np.mean(dists_np))
+            calc_std = float(np.std(dists_np))
+                        
+            # 평균의 일정 비율(예: 5%)을 최소 std로 보장 (권장)
+            min_std_ratio = calc_mean * 0.05 
+            final_std = max(calc_std, min_std_ratio, 0.0001)
+
             self.thresholds[0] = {
-                'mean': float(np.mean(dists_np)),
-                'std': float(np.std(dists_np))
+                'mean': calc_mean,
+                'std': final_std
             }
 
     def predict(self, X):
