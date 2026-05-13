@@ -89,28 +89,24 @@ class FewShotPrototypicalDetector:
             loss.backward()
             optimizer.step()
 
-        #  핵심 차이점: 인수인계 코드 방식 적용 (5개 랜덤 추출)
         self.model.eval()
         with torch.no_grad():
             final_embeds = self.model(X_tensor)
             
-            # 전체 데이터 수가 k_shots보다 작으면 전체를 씀, 아니면 k_shots만큼 랜덤 샘플링
-            total_samples = final_embeds.shape[0]
-            actual_shots = min(self.k_shots, total_samples)
+            # 랜덤 샘플링 제거! 
+            # 서비스 로직에서 이미 정예 멤버(예: 100개)만 추려서 X에 넣어줬으므로 그냥 다 씁니다.
+            actual_shots = final_embeds.shape[0] 
             
-            # 인덱스를 랜덤하게 뽑음
-            sampled_indices = random.sample(range(total_samples), actual_shots)
-            sampled_embeds = final_embeds[sampled_indices]
-            
-            #  5개 데이터의 평균만 내서 중심점(Prototype)으로 사용!
-            final_center = torch.mean(sampled_embeds, dim=0)
+            # 들어온 모든 데이터의 평균을 중심점(Prototype)으로 사용
+            final_center = torch.mean(final_embeds, dim=0)
             self.prototypes[0] = final_center.cpu().numpy()
             
-            # 임계값(Threshold)도 5개 데이터에 대해서만 계산
+            # 임계값 계산
             dists_np = torch.norm(final_embeds - final_center, dim=1).cpu().numpy()
-        
             calc_mean = float(np.mean(dists_np))
             calc_std = float(np.std(dists_np))
+            
+            # 비율 기반 하한선(5%) 적용
             min_std_ratio = calc_mean * 0.05 
             final_std = max(calc_std, min_std_ratio, 0.0001)
 
@@ -118,6 +114,35 @@ class FewShotPrototypicalDetector:
                 'mean': calc_mean,
                 'std': final_std if actual_shots > 1 else 1.0
             }
+        #  5개 랜덤 추출
+        # self.model.eval()
+        # with torch.no_grad():
+        #     final_embeds = self.model(X_tensor)
+            
+        #     # 전체 데이터 수가 k_shots보다 작으면 전체를 씀, 아니면 k_shots만큼 랜덤 샘플링
+        #     total_samples = final_embeds.shape[0]
+        #     actual_shots = min(self.k_shots, total_samples)
+            
+        #     # 인덱스를 랜덤하게 뽑음
+        #     sampled_indices = random.sample(range(total_samples), actual_shots)
+        #     sampled_embeds = final_embeds[sampled_indices]
+            
+        #     #  5개 데이터의 평균만 내서 중심점(Prototype)으로 사용!
+        #     final_center = torch.mean(sampled_embeds, dim=0)
+        #     self.prototypes[0] = final_center.cpu().numpy()
+            
+        #     # 임계값(Threshold)도 5개 데이터에 대해서만 계산
+        #     dists_np = torch.norm(final_embeds - final_center, dim=1).cpu().numpy()
+        
+        #     calc_mean = float(np.mean(dists_np))
+        #     calc_std = float(np.std(dists_np))
+        #     min_std_ratio = calc_mean * 0.05 
+        #     final_std = max(calc_std, min_std_ratio, 0.0001)
+
+        #     self.thresholds[0] = {
+        #         'mean': calc_mean,
+        #         'std': final_std if actual_shots > 1 else 1.0
+        #     }
 
     def predict(self, X):
         self.model.eval()

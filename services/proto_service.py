@@ -8,6 +8,7 @@ from database_rdb import SessionLocal, SensorData, ModelRegistry, PredictionLog
 from architectures.prototypical import PrototypicalLeakDetector 
 from architectures.fewshot_prototypical import FewShotPrototypicalDetector
 import os
+from sklearn.cluster import MiniBatchKMeans
 
 # --- 데이터 로드 (DB -> Numpy) ---
 def _get_training_data(db, sensor_id, days):
@@ -113,13 +114,38 @@ def _run_backtest(db, detector, sensor_id, model_id):
         db.commit()
         print(f"백테스팅 완료 ({len(logs)}건)")
 
+def _get_representative_samples(X_train, n_clusters=100):
+    """
+    수만 개의 데이터를 n_clusters 개의 정예 대표점으로 압축합니다.
+    """
+    if len(X_train) <= n_clusters:
+        return X_train
+    
+    # 1. MiniBatchKMeans로 데이터 그룹화 (메모리 효율적)
+    kmeans = MiniBatchKMeans(n_clusters=n_clusters, batch_size=1000, random_state=42)
+    kmeans.fit(X_train)
+    
+    # 2. 각 그룹의 중심점(Centroid)이 바로 우리의 '정예 Few-shot'입니다.
+    representative_samples = kmeans.cluster_centers_
+    
+    print(f"데이터 압축 완료: {len(X_train)}개 -> {len(representative_samples)}개 대표점")
+    return representative_samples
+
 # --- 전체 프로세스 조율 ---
 def train_proto_model_internal(sensor_id: str, model_type: str, update_mode: str, days: int, auto_activate: bool, memo: str = None):
     db = SessionLocal() 
     try:
         # [Step 1] 데이터 준비
-        X_train = _get_training_data(db, sensor_id, days)
-        if len(X_train) == 0: return print(f"{sensor_id}: 학습 데이터가 부족합니다.")
+        X_raw = _get_training_data(db, sensor_id, days)
+        if len(X_raw) == 0: return print(f"{sensor_id}: 학습 데이터가 부족합니다.")
+
+        if model_type != "all":
+            # 100개의 대표점 추출 (필요시 n_clusters 조절 가능)
+            X_train = _get_representative_samples(X_raw, n_clusters=100)
+            print(f"[{sensor_id}] Few-shot 모드: {len(X_raw)}개의 원본 데이터를 {len(X_train)}개의 정예 샘플로 압축 완료.")
+        else:
+            X_train = X_raw
+            print(f"[{sensor_id}] All 모드: {len(X_train)}개의 원본 데이터를 그대로 사용합니다.")
 
         # [Step 2] 아키텍처 준비
         detector = PrototypicalLeakDetector() if model_type == "all" else FewShotPrototypicalDetector()
