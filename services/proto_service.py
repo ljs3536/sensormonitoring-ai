@@ -109,7 +109,7 @@ def _run_backtest(db, detector, sensor_id, model_id):
     
     if len(X_test) > 0:
         results = detector.predict(X_test)
-        logs = [PredictionLog(MODEL_ID=model_id, MAC_ADDR=sensor_id, PROBABILITY=r['prob']*100, RESULT=r['is_leak']) for r in results]
+        logs = [PredictionLog(MODEL_ID=model_id, MAC_ADDR=sensor_id, PROBABILITY=r['prob']*100, RESULT=r['is_leak'], REASON=r['reason']) for r in results]
         db.bulk_save_objects(logs)
         db.commit()
         print(f"백테스팅 완료 ({len(logs)}건)")

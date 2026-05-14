@@ -133,9 +133,10 @@ class PrototypicalLeakDetector:
         # 3-Sigma Rule 통계적 울타리
         anomaly_limit = thresh_mean + (3.0 * thresh_std)
 
-        for emb in embeddings:
+        for i, emb in enumerate(embeddings):
             dist = np.linalg.norm(emb - proto_0)
             
+            reason = ""
             if dist <= anomaly_limit:
                 prob = 0.49 * (dist / (anomaly_limit + 1e-6))
                 is_leak = "N"
@@ -143,8 +144,12 @@ class PrototypicalLeakDetector:
                 excess = dist / (anomaly_limit + 1e-6)
                 prob = min(0.99, 0.50 + 0.1 * excess)
                 is_leak = "Y"
+                raw_data = X[i]
+                peak_idx = int(np.argmax(raw_data)) # 가장 값이 큰 인덱스
+                peak_val = float(raw_data[peak_idx])
+                reason = f"정상 범위를 초과했습니다. (특징점: {peak_idx}번째 주파수 대역에서 {peak_val:.4f}의 비정상적 진동폭 감지)"
                 
-            results.append({"prob": float(prob), "is_leak": is_leak})
+            results.append({"prob": float(prob), "is_leak": is_leak, "reason": reason})
 
         return results
 

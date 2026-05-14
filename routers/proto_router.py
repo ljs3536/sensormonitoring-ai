@@ -47,6 +47,7 @@ async def predict_leak_model(payload: LeakPredictRequest):
         detector.load(payload.file_path) 
         
         results = detector.predict(X_test)
+        
         return {"predictions": results}
 
     except Exception as e:
